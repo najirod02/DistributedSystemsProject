@@ -15,7 +15,20 @@ repositories {
     mavenCentral()
 }
 
+def versions = [
+        ScalaBinary: "2.13",
+        AkkaVersion: "2.8.0",
+        LogBackVersion: "1.2.3",
+        JunitVersion: "4.13.1"
+]
+
 dependencies {
+    implementation "com.typesafe.akka:akka-bom_${versions.ScalaBinary}:${versions.AkkaVersion}"
+    implementation "com.typesafe.akka:akka-actor-typed_${versions.ScalaBinary}:${versions.AkkaVersion}"
+
+    testImplementation "com.typesafe.akka:akka-actor-testkit-typed_${versions.ScalaBinary}:${versions.AkkaVersion}"
+    implementation "ch.qos.logback:logback-classic:${versions.LogBackVersion}"
+
     // Use JUnit Jupiter for testing.
     testImplementation libs.junit.jupiter
 

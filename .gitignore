@@ -98,3 +98,6 @@ gradle-app.setting
 
 # remove generated logs
 logs
+
+# remove vscode settings
+.vscode
