@@ -14,7 +14,6 @@ import java.util.List;
 
 public class Node extends AbstractActor{
     
-    //TODO: might be useless to have a state
     enum State {
         JOIN,
         LEAVE,
@@ -25,7 +24,7 @@ public class Node extends AbstractActor{
     private Integer name;
     private Logger logger;
     private Map<Integer, VersionedValue> storage;
-    public State state;//so that clients avoid to contact a crashed node and wait indefinetly
+    public State state;//so that clients/nodes avoid to contact a crashed node and wait indefinetly
     private boolean isCoordinator;
     private boolean isQuorumMet;//as timeout msg is scheduled, check flag to determine 
                                 //if quorum has been reached before the timeout
