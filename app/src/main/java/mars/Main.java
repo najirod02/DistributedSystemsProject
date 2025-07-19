@@ -3,12 +3,14 @@
  */
 package mars;
 
+
 public class Main {
-    public String getGreeting() {
-        return "Hello World!";
-    }
+    
+    //user.dir will make sure that all logs are generated inside the projet folder starting from app
+    private static final String LOGGER_FILE_PATH = System.getProperty("user.dir") + "/logs/test.txt";
 
     public static void main(String[] args) {
-        System.out.println(new Main().getGreeting());
+        TestLogger testLogger = new TestLogger(LOGGER_FILE_PATH);
+        testLogger.runTest();
     }
 }
