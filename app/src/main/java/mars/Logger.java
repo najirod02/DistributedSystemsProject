@@ -82,13 +82,12 @@ public class Logger {
         try {
             LocalTime now = LocalTime.now();
             long millisTotal = ChronoUnit.MILLIS.between(startTime, now);
-            long hours = millisTotal / (1000 * 60 * 60);
             long minutes = (millisTotal / (1000 * 60)) % 60;
             long seconds = (millisTotal / 1000) % 60;
             long millis = millisTotal % 1000;
 
             StringBuilder localBuilder = new StringBuilder(
-                String.format("[%02d:%02d:%02d.%03d] ", hours, minutes, seconds, millis)
+                String.format("[%02d:%02d.%03d] ", minutes, seconds, millis)
             );
             localBuilder.append("[ ").append(actor).append(" ] ").append(string).append("\n");
 

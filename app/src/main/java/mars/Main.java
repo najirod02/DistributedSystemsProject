@@ -16,7 +16,7 @@ public class Main {
     
     public static void delay(){
         try{
-            Thread.sleep(rand.nextInt(300) + 200);
+            Thread.sleep(rand.nextInt(500) + 500);
         }catch(InterruptedException e){
             System.err.println(e);
         }
@@ -40,21 +40,23 @@ public class Main {
 
         // create some nodes and make them join the network through the correct message
         //this will be used as the bootstrap for every new node
+        System.out.println("Creating Nodes");
         ActorRef bootstrap = system.actorOf(Node.props(40, logger), "40");
         nodeList.add(bootstrap);
-
-        bootstrap.tell(new JoinMsg(bootstrap), null);
 
         nodeList.add(system.actorOf(Node.props(20, logger), "20"));
         nodeList.add(system.actorOf(Node.props(30, logger), "30"));
         nodeList.add(system.actorOf(Node.props(10, logger), "10"));
         
+        System.out.println("Joining nodes");
+        bootstrap.tell(new JoinMsg(bootstrap), null);
+        delay();
         nodeList.get(1).tell(new JoinMsg(bootstrap), null);
-        //delay();
+        delay();
         nodeList.get(2).tell(new JoinMsg(bootstrap), null);
-        //delay();
-        nodeList.get(3).tell(new JoinMsg(nodeList.get(2)), null);
-        //delay();
+        delay();
+        nodeList.get(3).tell(new JoinMsg(bootstrap), null);
+        delay();
 
         // create some clients and ask them to make some requests
         // note that even if nodeList is not ordered like a ring, it doesn't
@@ -66,6 +68,7 @@ public class Main {
         // client_2.tell(new UpdateMsg(10, "COPPER"), null);
         // client_2.tell(new GetMsg(10), null);
 
+        logger.closeStream();
         system.terminate();
     }
 }

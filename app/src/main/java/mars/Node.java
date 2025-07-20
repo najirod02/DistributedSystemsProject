@@ -10,6 +10,9 @@ import java.io.Serializable;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+
+import javax.sound.midi.SysexMessage;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -117,6 +120,7 @@ public class Node extends AbstractActor{
      */
     private void onJoinMsg(JoinMsg msg){
         //msg will contain the bootstrap node to ask for the peer list
+        this.state = State.JOIN;
         ActorRef bootstrap = msg.bootstrap;
         logger.log(this.name.toString(), "Requesting peers list from " + bootstrap.path().name());
         bootstrap.tell(new RequestPeersMsg(), getSelf());
@@ -141,10 +145,11 @@ public class Node extends AbstractActor{
         //if it is a stable node, it doesn't need to update other nodes
         if(this.state == State.STABLE) return;
 
-        //send new list to all other nodes exept yourself
+        //send new list to all other nodes except yourself
         for(ActorRef node : this.peerList){
             if(node != getSelf()){
-                getSender().tell(new PeersMsg(this.peerList), getSelf());
+                node.tell(new PeersMsg(this.peerList), getSelf());
+                logger.log(this.name.toString(), "send update to " + node.path().name());
             }
         }
 
