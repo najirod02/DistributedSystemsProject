@@ -86,15 +86,13 @@ public class Logger {
             long seconds = (millisTotal / 1000) % 60;
             long millis = millisTotal % 1000;
 
-            StringBuilder localBuilder = new StringBuilder(
-                String.format("[%02d:%02d.%03d] ", minutes, seconds, millis)
-            );
-            localBuilder.append("[ ").append(actor).append(" ] ").append(string).append("\n");
-
+            String timestamp = String.format("%02d:%02d.%03d", minutes, seconds, millis);
+            String formatted = String.format("%-12s %-15s %s\n", timestamp, actor, string);
+            
             //this should avoid concurrent writes on file
             //logs might NOT be time ordered
             synchronized (this) {
-                writer.append(localBuilder.toString());
+                writer.append(formatted);
                 writer.flush();
             }
 

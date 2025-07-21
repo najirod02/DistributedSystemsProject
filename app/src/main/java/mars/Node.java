@@ -11,14 +11,17 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 
-import javax.sound.midi.SysexMessage;
-
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 
+/**
+ * NOTE: a node stores a key only if the key is strictly less than the node itself
+ * 
+ * e.g.
+ * key = 10, node = 10 -> DON'T store
+ * key = 9, node = 10 -> store
+ */
 public class Node extends AbstractActor{
     
     enum State {
@@ -60,9 +63,13 @@ public class Node extends AbstractActor{
     public static class RequestPeersMsg implements Serializable {}
 
     public static class PeersMsg implements Serializable {
-        public final Set<ActorRef> peerList;
-        public PeersMsg(Set<ActorRef> peerList){
+        public final Set<ActorRef> peerList;//the set of the nodes in the network
+        public final Map<Integer, VersionedValue> dataToStore;//in case of leaving, share the data to store
+        public final State senderState;//useful to understand if the sender is a joining or a leaving node
+        public PeersMsg(Set<ActorRef> peerList, Map<Integer, VersionedValue> dataToStore, State senderState){
             this.peerList = peerList;
+            this.dataToStore = dataToStore != null ? dataToStore : new HashMap<>();
+            this.senderState = senderState;
         }
     }
 
@@ -72,6 +79,8 @@ public class Node extends AbstractActor{
             this.bootstrap = bootstrap;
         }
     }
+
+    public static class LeaveMsg implements Serializable {}
 
     public static class ItemsRequestMsg implements Serializable {}
 
@@ -133,10 +142,53 @@ public class Node extends AbstractActor{
     }
 
     // UTILS --------------------------------------------
+    /**
+     * a simple function to convert the set into an array list
+     * @param set a set containing actor refs
+     * @return a list containing all the actor refs of the set
+     */
     private ArrayList<ActorRef> setToList(Set<ActorRef> set){
         return new ArrayList<>(set);
     }
 
+    /**
+     * given the list of peers, find the responsible replica of a given key
+     * @param key
+     * @param sortedPeers
+     * @return the index of the first responsbile replica
+     */
+    private int findResponsibleReplicaIndex(int key, List<ActorRef> sortedPeers) {
+        for (int i = 0; i < sortedPeers.size(); i++) {
+            int nodeId = Integer.parseInt(sortedPeers.get(i).path().name());
+            if (nodeId > key) {
+                return i;
+            }
+        }
+        //if no node has ID > key, wrap to first
+        return 0;
+    }
+
+    /**
+     * given the list of peers and the first responsible replica, return the list of N responsibles
+     * @param sortedPeers
+     * @param startIndex
+     * @return the list of responsible replicas
+     */
+    private List<ActorRef> getNextN(List<ActorRef> sortedPeers, int startIndex) {
+        List<ActorRef> result = new ArrayList<>();
+        for (int i = 0; i < N; ++i) {
+            int idx = (startIndex + i) % sortedPeers.size();
+            result.add(sortedPeers.get(idx));
+        }
+        return result;
+    }
+
+    /**
+     * when a node request the storage from other nodes, it needs to merge them to its
+     * storage checking that the key-value pare stored is the latest version and that
+     * the node can actually store it based on the key value
+     * @param incomingStorage the storage it needs to be merged
+     */
     public void mergeStorage(Map<Integer, VersionedValue> incomingStorage) {
         for (Map.Entry<Integer, VersionedValue> entry : incomingStorage.entrySet()) {
             Integer key = entry.getKey();
@@ -153,6 +205,11 @@ public class Node extends AbstractActor{
         }
     }
 
+    /**
+     * after a node joins the network, all "previous" replicas need to check if they need
+     * to drop certain key-value pairs based on the name of the new node
+     * @param newNode the new node that has joined the network
+     */
     private void cleanupStorageAfterNewNodeJoin(ActorRef newNode) {
         int newNodeName = Integer.parseInt(newNode.path().name());
         ArrayList<ActorRef> sortedNodes = new ArrayList<>(this.peerList);
@@ -186,10 +243,9 @@ public class Node extends AbstractActor{
         //remove the keys this node should no longer hold
         for (Integer key : keysToRemove) {
             this.storage.remove(key);
-            logger.log(this.name.toString(), "Removed key " + key + " (no longer responsible after node " + newNodeName + " joined)");
+            logger.log(this.name.toString() + " " + this.state, "Removed key " + key + " (no longer responsible after node " + newNodeName + " joined)");
         }
     }
-
 
     // BEHAVIOR -----------------------------------------
     /**
@@ -203,8 +259,51 @@ public class Node extends AbstractActor{
         //msg will contain the bootstrap node to ask for the peer list
         this.state = State.JOIN;
         ActorRef bootstrap = msg.bootstrap;
-        logger.log(this.name.toString(), "Requesting peers list from " + bootstrap.path().name());
+        logger.log(this.name.toString() + " " + this.state, "Requesting peers list from " + bootstrap.path().name());
         bootstrap.tell(new RequestPeersMsg(), getSelf());
+    }
+
+    /**
+     * message send from the main to tell the node to leave the network
+     * it requires to announce every other node that it is leaving
+     * and passes its data items to any node that becomes responsible
+     * for them
+     * @param msg
+     */
+    private void onLeaveMsg(LeaveMsg msg){
+        //use the peer list to announce everyone of the departing
+        this.state = State.LEAVE;
+        Set<ActorRef> newPeerList = new TreeSet<>(this.peerList);
+        newPeerList.remove(getSelf());
+        logger.log(this.name.toString()  + " " + this.state, "Starting leaving procedure");
+
+        //compute which key to send to which node
+        Map<ActorRef, Map<Integer, VersionedValue>> nodeToDataMap = new HashMap<>();
+        List<ActorRef> sortedPeers = setToList(newPeerList);
+
+        for (Map.Entry<Integer, VersionedValue> entry : this.storage.entrySet()) {
+            int key = entry.getKey();
+            VersionedValue item = entry.getValue();
+
+            int idx = findResponsibleReplicaIndex(key, sortedPeers);
+            List<ActorRef> targets = getNextN(sortedPeers, idx);
+
+            for (ActorRef target : targets) {
+                nodeToDataMap.computeIfAbsent(target, k -> new HashMap<>()).put(key, item);
+            }
+        }
+
+        //send peer list + specific data to each node
+        for (ActorRef node : newPeerList) {
+            Map<Integer, VersionedValue> payload = nodeToDataMap.getOrDefault(node, new HashMap<>());
+            node.tell(new PeersMsg(newPeerList, payload, State.LEAVE), getSelf());
+            logger.log(this.name.toString()  + " " + this.state, "Tell " + node.path().name() + " to update peer list (+ storage)");
+        }
+
+        //update local peer list too not only of the other nodes
+        this.peerList.clear();
+        this.storage.clear();
+        logger.log(this.name.toString()  + " " + this.state, "Left the network and cleared peer list and storage");
     }
 
     /**
@@ -213,7 +312,7 @@ public class Node extends AbstractActor{
      */
     public void onRequestPeersMsg(RequestPeersMsg msg){
         // the bootstrap simply send back its list of peers
-        getSender().tell(new PeersMsg(this.peerList), getSelf());
+        getSender().tell(new PeersMsg(this.peerList, null, State.STABLE), getSelf());
     }
 
     /**
@@ -223,19 +322,43 @@ public class Node extends AbstractActor{
      * otherwise, will simply update its list
      * @param msg contains latest peers list
      */
-    private void onPeersMsg(PeersMsg msg){
-        //update own list with the one from the bootstrap / other node
-        this.peerList.addAll(msg.peerList);
-        logger.log(this.name.toString(), "Updated peer list with now " + this.peerList.size() + " nodes");
-
-        //the joining node needs to announce itself to the network
-        //if it is a stable node, it doesn't need to update other nodes
-        if(this.state == State.STABLE){
+    private void onPeersMsg(PeersMsg msg) {
+        //handle JOIN announcement from another node
+        if (this.state == State.STABLE && msg.senderState == State.JOIN) {
+            this.peerList.addAll(msg.peerList); // update peer list
+            logger.log(this.name.toString() + " " + this.state, "Updated peer list after JOIN, now " + this.peerList.size() + " nodes");
             cleanupStorageAfterNewNodeJoin(getSender());
-            return;  
-        } 
+            return;
+        }
 
-        //the joining node request the data to its neighbor nodes
+        //handle LEAVE announcement from another node
+        if (this.state == State.STABLE && msg.senderState == State.LEAVE) {
+            //replace peer list (sender already removed themselves)
+            this.peerList.clear();
+            this.peerList.addAll(msg.peerList);
+            logger.log(this.name.toString() + " " + this.state, "Updated peer list after LEAVE, now " + this.peerList.size() + " nodes");
+
+            //store only if version is greater than the one in local storage
+            for (Map.Entry<Integer, VersionedValue> entry : msg.dataToStore.entrySet()) {
+                int key = entry.getKey();
+                VersionedValue incoming = entry.getValue();
+                VersionedValue existing = this.storage.get(key);
+
+                if (existing == null || incoming.version > existing.version) {
+                    this.storage.put(key, incoming);
+                    logger.log(this.name.toString() + " " + this.state, "Stored key " + key + " from LEAVE of " + getSender().path().name() + " with version " + incoming.version);
+                } else {
+                    logger.log(this.name.toString() + " " + this.state, "Ignored key " + key + " from LEAVE (existing version " + existing.version + " >= " + incoming.version + ")");
+                }
+            }
+            return;
+        }
+
+        //otherwise, likely this node just joined and is syncing from others
+        this.peerList.addAll(msg.peerList);
+        logger.log(this.name.toString() + " " + this.state, "Updated peer list with now " + this.peerList.size() + " nodes");
+
+        //send ItemsRequest to next N peers
         /*
          * e.g.
          * 10 - 20 - 30 - 40
@@ -247,7 +370,7 @@ public class Node extends AbstractActor{
         for (int i = 1; i <= N; ++i) {
             int index = (startingIndex + i) % list.size();
             list.get(index).tell(new ItemsRequestMsg(), getSelf());
-            logger.log(this.name.toString(), "Request storage to node " + list.get(index).path().name());
+            logger.log(this.name.toString() + " " + this.state, "Request storage to node " + list.get(index).path().name());
         }
     }
 
@@ -270,18 +393,18 @@ public class Node extends AbstractActor{
         mergeStorage(msg.storage);
 
         if(n_responses == N){
-            logger.log(this.name.toString(), "Obtained all stores");
+            logger.log(this.name.toString() + " " + this.state, "Obtained all stores");
             //annouce to all nodes the new joining node
             //send new list to all other nodes except yourself
             for(ActorRef node : this.peerList){
                 if(node != getSelf()){
-                    node.tell(new PeersMsg(this.peerList), getSelf());
+                    node.tell(new PeersMsg(this.peerList, null, State.JOIN), getSelf());
                 }
             }
 
             this.state = State.STABLE;//now the node is stable in the network
             n_responses = 0;
-            logger.log(this.name.toString(), "Now STABLE in the network with " + this.peerList.size() + " nodes");
+            logger.log(this.name.toString() + " " + this.state, "Now STABLE in the network with " + this.peerList.size() + " nodes");
         } 
     }
 
@@ -300,9 +423,10 @@ public class Node extends AbstractActor{
 
         //respond to client
         getSender().tell(new UpdateResponse(true), getSelf());
-        logger.log(this.name.toString(), "Finished update request for " + getSender().path().name());
+        logger.log(this.name.toString() + " " + this.state, "Finished update request for " + getSender().path().name());
     }
 
+    //TODO: finish the quorum logic
     private void onGetMsg(GetMsg msg){
         VersionedValue item = storage.get(msg.key);
 
@@ -310,10 +434,10 @@ public class Node extends AbstractActor{
         if(item == null){
             //doesn't exist or no quorum
             getSender().tell(new GetResponse(false, null, -1), getSelf());
-            logger.log(this.name.toString(), "Finished get request for " + getSender().path().name() + " with ERROR");
+            logger.log(this.name.toString() + " " + this.state, "Finished get request for " + getSender().path().name() + " with ERROR");
         } else {
             getSender().tell(new GetResponse(true, item.value, item.version), getSelf());
-            logger.log(this.name.toString(), "Finished get request for " + getSender().path().name());
+            logger.log(this.name.toString() + " " + this.state, "Finished get request for " + getSender().path().name());
         }
     }
 
@@ -331,6 +455,7 @@ public class Node extends AbstractActor{
     public Receive createReceive() {
       return receiveBuilder()
         .match(JoinMsg.class, this::onJoinMsg)
+        .match(LeaveMsg.class, this::onLeaveMsg)
         .match(RequestPeersMsg.class, this::onRequestPeersMsg)
         .match(PeersMsg.class, this::onPeersMsg)
         .match(ItemsRequestMsg.class, this::onItemsRequestMsg)

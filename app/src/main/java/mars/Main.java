@@ -4,6 +4,7 @@ import akka.actor.ActorRef;
 import akka.actor.ActorSystem;
 
 import mars.Node.JoinMsg;
+import mars.Node.LeaveMsg;
 
 import mars.Client.UpdateMsg;
 import mars.Client.GetMsg;
@@ -24,7 +25,6 @@ public class Main {
 
     //user.dir will make sure that all logs are generated inside the projet folder starting from app
     private static final String LOGGER_FILE_BASE_PATH = System.getProperty("user.dir") + "/logs";
-    private static final int N_NODES = 2;
     private static final Random rand = new Random();
 
     public static void main(String[] args) {
@@ -59,6 +59,12 @@ public class Main {
         client_1.tell(new GetMsg(10), null);
         delay();
 
+        client_1.tell(new UpdateMsg(10, "IRON++"), null);
+        delay();
+
+        client_1.tell(new UpdateMsg(9, "GOLD"), null);
+        delay();
+
         nodeList.add(system.actorOf(Node.props(20, logger), "20"));
         nodeList.get(1).tell(new JoinMsg(bootstrap), null);
         delay();
@@ -77,6 +83,12 @@ public class Main {
         nodeList.get(3).tell(new JoinMsg(bootstrap), null);
         delay();
 
+        //remove a node from the network
+        nodeList.get(1).tell(new LeaveMsg(), null);
+        delay();
+
+        //make sure that all the last writes are done before closing the stream
+        //to be sure, put a delay before closing the stream
         logger.closeStream();
         system.terminate();
     }
