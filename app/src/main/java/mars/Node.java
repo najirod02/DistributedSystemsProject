@@ -1,5 +1,6 @@
 package mars;
 
+import akka.Version;
 import akka.actor.AbstractActor;
 import akka.actor.ActorRef;
 import akka.actor.Props;
@@ -11,6 +12,7 @@ import java.io.Serializable;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -25,10 +27,10 @@ import java.util.List;
  */
 public class Node extends AbstractActor{
     
-    private static final int N = 2,//replication factor
-                             R = 3,//reading quorum 
-                             W = 3,//writing quorum
-                             T = 1500;//in millis
+    private static final int N = 3,//replication factor
+                             R = 2,//reading quorum 
+                             W = 2,//writing quorum
+                             T = 1000;//in millis
                     
     enum State {
         JOIN,
@@ -38,13 +40,24 @@ public class Node extends AbstractActor{
         RECOVERY,
     }
 
+    enum Quorum {
+        GET,
+        UPDATE,
+        GET_ACK,
+        UPDATE_ACK
+    }
+
     private Integer name;
     private Logger logger;
     private Map<Integer, VersionedValue> storage;
     public State state;//so that clients/nodes avoid to contact a crashed node and wait indefinetly
-    private boolean isCoordinator;
     private boolean isQuorumReached;//as timeout msg is scheduled, check flag to determine 
                                 //if quorum has been reached before the timeout
+    private ActorRef client;//the client that makes the request
+    private VersionedValue latestValue;
+    private final Map<UUID, PendingRequest> pendingGets = new HashMap<>();
+    private final Map<UUID, PendingRequest> pendingUpdates = new HashMap<>();
+
     private Set<ActorRef> peerList;//contains also yourself
 
     private boolean waitingForResponses = false;//in order to "ignore" the timeout
@@ -61,8 +74,17 @@ public class Node extends AbstractActor{
         }
     }
 
+    private class PendingRequest {
+        public ActorRef client;
+        public VersionedValue latest = new VersionedValue(null, -1);
+        public int responses = 0;
+
+        public PendingRequest(ActorRef client) {
+            this.client = client;
+        }
+    }
+
     // MESSAGES --------------------------------------------
-    public static class TimeoutMsg implements Serializable {}
 
     // --- STATE MESSAGES -------------------------------
     public static class JoinMsg implements Serializable {
@@ -125,8 +147,32 @@ public class Node extends AbstractActor{
         }
     }
 
+    public static class QuorumRequestMsg implements Serializable {
+        public final Integer key;
+        public final VersionedValue value;
+        public final Quorum request;//to distinguish between a get, update request and a confirm response
+        public final UUID requestId;
+        public QuorumRequestMsg(Integer key, VersionedValue value, Quorum request, UUID requestId){
+            this.key = key;
+            this.value = value;
+            this.request = request;
+            this.requestId = requestId;
+        }
+    }
+
     // --- OTHER MESSAGES -------------------------------
     public static class LogStorage implements Serializable {}
+
+    public static class TimeoutMsg implements Serializable {}
+
+    public static class QuorumTimeoutMsg implements Serializable {
+        public final Quorum request;
+        public final UUID requestId;
+        public QuorumTimeoutMsg(Quorum request, UUID requestId){
+            this.request = request;
+            this.requestId = requestId;
+        }
+    }
 
     // CONSTRUCTOR -----------------------------------------
     public Node(Integer name, Logger logger){
@@ -152,7 +198,6 @@ public class Node extends AbstractActor{
         
         this.storage = new HashMap<>();
         this.state = State.JOIN;
-        this.isCoordinator = false;
         this.isQuorumReached = false;
     }
 
@@ -391,37 +436,64 @@ public class Node extends AbstractActor{
     }
 
     // --- SERVICE HANDLERS -------------------------------
-    //TODO: finish the quorum logic
-    //logic about that keys must be less than the node name unless we need to wrap around
-    private void onUpdateMsg(UpdateMsg msg){
-        Integer version = 0;
-        //check if the item is already stored
-        VersionedValue item = storage.get(msg.key);
-        if(item != null){
-            version = item.version;
-        }
-        //in both cases increment so that if it is the first time, it will
-        //have version 1 otherwise, it will be incremented by 1
-        storage.put(msg.key, new VersionedValue(msg.value, ++version));
 
-        //respond to client
-        getSender().tell(new UpdateResponse(true), getSelf());
-        logger.log(this.name.toString() + " " + this.state, "Finished update request for " + getSender().path().name());
+    private void onUpdateMsg(UpdateMsg msg){
+        logger.log(this.name.toString() + " " + this.state, "Received UPDATE request from " + getSender().path().name());
+        
+        //store the pending get request of the client
+        PendingRequest pending = new PendingRequest(getSender());
+        UUID requestId = UUID.randomUUID();
+        pendingUpdates.put(requestId, pending);
+
+        //send quorum request to replica nodes
+        List<ActorRef> peers = setToList(this.peerList);
+        int firstReplicaIndex = findResponsibleReplicaIndex(msg.key, peers);
+        List<ActorRef> replicas = getNextN(peers, firstReplicaIndex);
+        //replicas.add(peers.get(firstReplicaIndex));
+
+        for(ActorRef node : replicas){
+            node.tell(new QuorumRequestMsg(msg.key, new VersionedValue(msg.value, -1), Quorum.UPDATE, requestId), getSelf());
+            logger.log(this.name.toString() + " " + this.state, "Sending UPDATE request to node " + node.path().name());
+        }
+
+        //schedule timeout to check if quorum is valid
+        getContext().getSystem().scheduler().scheduleOnce(
+            Duration.create(T, TimeUnit.MILLISECONDS),
+            getSelf(),
+            new QuorumTimeoutMsg(Quorum.GET, requestId),
+            getContext().getSystem().dispatcher(),
+            ActorRef.noSender()
+        );
     }
 
-    //TODO: finish the quorum logic
+    //changing of variables 
     private void onGetMsg(GetMsg msg){
-        VersionedValue item = storage.get(msg.key);
+        logger.log(this.name.toString() + " " + this.state, "Received GET request from " + getSender().path().name());
 
-        //respond to client
-        if(item == null){
-            //doesn't exist or no quorum
-            getSender().tell(new GetResponse(false, null, -1), getSelf());
-            logger.log(this.name.toString() + " " + this.state, "Finished get request for " + getSender().path().name() + " with ERROR");
-        } else {
-            getSender().tell(new GetResponse(true, item.value, item.version), getSelf());
-            logger.log(this.name.toString() + " " + this.state, "Finished get request for " + getSender().path().name());
+        //store the pending get request of the client
+        PendingRequest pending = new PendingRequest(getSender());
+        UUID requestId = UUID.randomUUID();
+        pendingGets.put(requestId, pending);
+
+        //send quorum request to replica nodes
+        List<ActorRef> peers = setToList(this.peerList);
+        int firstReplicaIndex = findResponsibleReplicaIndex(msg.key, peers);
+        List<ActorRef> replicas = getNextN(peers, firstReplicaIndex);
+        //replicas.add(peers.get(firstReplicaIndex));
+
+        for(ActorRef node : replicas){
+            node.tell(new QuorumRequestMsg(msg.key, null, Quorum.GET, requestId), getSelf());
+            logger.log(this.name.toString() + " " + this.state, "Sending GET request to node " + node.path().name());
         }
+
+        //schedule timeout to check if quorum is valid
+        getContext().getSystem().scheduler().scheduleOnce(
+            Duration.create(T, TimeUnit.MILLISECONDS),
+            getSelf(),
+            new QuorumTimeoutMsg(Quorum.UPDATE, requestId),
+            getContext().getSystem().dispatcher(),
+            ActorRef.noSender()
+        );
     }
 
     // --- PROCEDURE HANDLERS -------------------------------
@@ -557,6 +629,58 @@ public class Node extends AbstractActor{
         }
     }
 
+    private void onQuorumRequestMsg(QuorumRequestMsg msg){
+        if(msg.request == Quorum.GET){
+            //get request
+            //the node responds to the coordinaotr with the stored value
+            getSender().tell(new QuorumRequestMsg(msg.key, this.storage.get(msg.key), Quorum.GET_ACK, msg.requestId), getSelf());
+            logger.log(this.name.toString() + " " + this.state, "Responding to GET request from " + getSender().path().name());
+        } else if(msg.request == Quorum.UPDATE){
+            //update request
+            Integer version = 0;
+            //check if the item is already stored
+            VersionedValue item = storage.get(msg.key);
+            if(item != null){
+                version = item.version;
+            }
+            //in both cases increment so that if it is the first time, it will
+            //have version 1 otherwise, it will be incremented by 1
+            this.storage.put(msg.key, new VersionedValue(msg.value.value, ++version));
+            getSender().tell(new QuorumRequestMsg(msg.key, this.storage.get(msg.key), Quorum.UPDATE_ACK, msg.requestId), getSelf());
+            logger.log(this.name.toString() + " " + this.state, "Responding to UPDATE request from " + getSender().path().name());
+        } else if(msg.request == Quorum.GET_ACK){
+            //the coordinator is getting back and ack for get
+            //check if value received is the latest version
+            PendingRequest pending = pendingGets.get(msg.requestId);
+            
+            if(pending == null) return;//in case of errors
+
+            if(msg.value != null && msg.value.version > pending.latest.version){
+                pending.latest.version = msg.value.version;
+                pending.latest.value = msg.value.value;
+            }
+
+            if(++pending.responses == R){
+                //quorum reached, respond to client
+                pending.client.tell(new GetResponse(true, pending.latest.value, pending.latest.version), getSelf());
+                logger.log(this.name.toString() + " " + this.state, "GET request finalized");
+                pendingGets.remove(msg.requestId);
+            }
+        } else if(msg.request == Quorum.UPDATE_ACK){
+            //the coordinator is getting back and ack for update
+            PendingRequest pending = pendingUpdates.get(msg.requestId);
+
+            if(pending == null) return;//in case of errors
+
+            if(++pending.responses == W){
+                //quorum reached, respond to client
+                pending.client.tell(new UpdateResponse(true), getSelf());
+                logger.log(this.name.toString() + " " + this.state, "UPDATE request finalized");
+                pendingUpdates.remove(msg.requestId);
+            }
+        }
+    }
+
     // --- OTHER MESSAGES -------------------------------
     /**
      * not a required functionality but becomes useful in debugging
@@ -595,6 +719,24 @@ public class Node extends AbstractActor{
         }
     }
 
+    private void onQuorumTimeoutMsg(QuorumTimeoutMsg msg) {
+        if (msg.request == Quorum.GET) {
+            PendingRequest pending = pendingGets.get(msg.requestId);
+            if (pending != null && pending.responses < R) {
+                pending.client.tell(new GetResponse(false, null, -1), getSelf());
+                logger.log(this.name.toString() + " " + this.state, "GET request TIMEOUT, no quorum");
+                pendingGets.remove(msg.requestId);//clean up
+            }
+        } else if (msg.request == Quorum.UPDATE) {
+            PendingRequest pending = pendingUpdates.get(msg.requestId);
+            if (pending != null && pending.responses < W) {
+                pending.client.tell(new UpdateResponse(false), getSelf());
+                logger.log(this.name.toString() + " " + this.state, "UPDATE request TIMEOUT, no quorum");
+                pendingUpdates.remove(msg.requestId);
+            }
+        }
+    }
+
     //define the mapping between the received message types and actor methods
     @Override
     public Receive createReceive() {
@@ -605,18 +747,20 @@ public class Node extends AbstractActor{
         .match(CrashMsg.class, this::onCrashMsg)
 
         //service handlers
-        .match(UpdateMsg.class, this::onUpdateMsg)
         .match(GetMsg.class, this::onGetMsg)
+        .match(UpdateMsg.class, this::onUpdateMsg)
 
         //procedure handlers
         .match(RequestPeersMsg.class, this::onRequestPeersMsg)
         .match(PeersMsg.class, this::onPeersMsg)
         .match(ItemsRequestMsg.class, this::onItemsRequestMsg)
         .match(ItemRepartitioningMsg.class, this::onItemRepartitioningMsg)
+        .match(QuorumRequestMsg.class, this::onQuorumRequestMsg)
         
         //others handlers
         .match(LogStorage.class, this::onLogStorageMsg)
         .match(TimeoutMsg.class, this::onTimeoutMsg)
+        .match(QuorumTimeoutMsg.class, this::onQuorumTimeoutMsg)
 
         .matchAny(msg -> {
             //any other message is ignored

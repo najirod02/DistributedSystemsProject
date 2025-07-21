@@ -56,6 +56,19 @@ public class Main {
         ActorRef bootstrap = system.actorOf(Node.props(40, logger), "40");
         nodeList.add(bootstrap);
         
+        System.out.println("Join 20 - 30 - 10");
+        nodeList.add(system.actorOf(Node.props(20, logger), "20"));
+        nodeList.get(1).tell(new JoinMsg(bootstrap), null);
+        delay();
+
+        nodeList.add(system.actorOf(Node.props(30, logger), "30"));
+        nodeList.get(2).tell(new JoinMsg(bootstrap), null);
+        delay();
+
+        nodeList.add(system.actorOf(Node.props(10, logger), "10"));
+        nodeList.get(3).tell(new JoinMsg(bootstrap), null);
+        delay();
+
         // create some clients and ask them to make some requests
         // note that even if nodeList is not ordered like a ring, it doesn't
         // matter as clients can ask anyone
@@ -66,43 +79,30 @@ public class Main {
         client_1.tell(new UpdateMsg(10, "IRON"), null);
         delay();
 
+        client_2.tell(new UpdateMsg(10, "IRON++"), null);
+        delay();
+
         client_1.tell(new GetMsg(10), null);
         delay();
 
-        client_1.tell(new UpdateMsg(10, "IRON++"), null);
-        delay();
+        // client_1.tell(new UpdateMsg(10, "IRON++"), null);
+        // delay();
 
-        client_1.tell(new UpdateMsg(9, "GOLD"), null);
-        delay();
+        // client_1.tell(new UpdateMsg(9, "GOLD"), null);
+        // delay();
 
-        System.out.println("Join 20 - 30 - 10");
-        nodeList.add(system.actorOf(Node.props(20, logger), "20"));
-        nodeList.get(1).tell(new JoinMsg(bootstrap), null);
-        delay();
+        // client_2.tell(new UpdateMsg(34, "COPPER"), null);
+        // delay();
 
-        client_2.tell(new UpdateMsg(10, "COPPER"), null);
-        delay();
+        // client_2.tell(new GetMsg(34), null);
+        // delay();
 
-        client_2.tell(new GetMsg(10), null);
-        delay();
-
-        nodeList.add(system.actorOf(Node.props(30, logger), "30"));
-        nodeList.get(2).tell(new JoinMsg(bootstrap), null);
-        delay();
-
-        //crash 20 - 30 and recover only 20
-        System.out.println("Crash 20 - 30 and recover only 20");
-        nodeList.get(1).tell(new CrashMsg(), null);
-        delay();
-        nodeList.get(2).tell(new CrashMsg(), null);
-        delay();
-        nodeList.get(1).tell(new RecoveryMsg(bootstrap), null);
-        delay();
-
-        System.out.println("Join 10 and store key 10");
-        nodeList.add(system.actorOf(Node.props(10, logger), "10"));
-        nodeList.get(3).tell(new JoinMsg(bootstrap), null);
-        delay();
+        // //crash 20 and recover it
+        // System.out.println("Crash 20 and recover");
+        // nodeList.get(1).tell(new CrashMsg(), null);
+        // delay();
+        // nodeList.get(1).tell(new RecoveryMsg(bootstrap), null);
+        // delay();
 
         System.out.println("Print network storage");
         for(ActorRef node : nodeList){
@@ -110,21 +110,15 @@ public class Main {
         }
         delay();
 
-        System.out.println("Leave 20");
-        nodeList.get(1).tell(new LeaveMsg(), null);
-        delay();
+        // System.out.println("Leave 20");
+        // nodeList.get(1).tell(new LeaveMsg(), null);
+        // delay();
 
-        System.out.println("Print network storage after 20 leaving");
-        for(ActorRef node : nodeList){
-            node.tell(new LogStorage(), null);
-        }
-        delay();
-
-        System.out.println("Crash and recover 30");
-        nodeList.get(2).tell(new CrashMsg(), null);
-        delay();
-        nodeList.get(2).tell(new RecoveryMsg(nodeList.get(3)), null);
-        delay();
+        // System.out.println("Print network storage after 20 leaving");
+        // for(ActorRef node : nodeList){
+        //     node.tell(new LogStorage(), null);
+        // }
+        // delay();
 
         //make sure that all the last writes are done before closing the stream
         //to be sure, put a delay before closing the stream

@@ -16,7 +16,7 @@ import java.util.concurrent.TimeUnit;
 import scala.concurrent.duration.Duration;
 
 public class Client extends AbstractActor{
-    private static final long TIMEOUT = 1500;//in millis
+    private static final long TIMEOUT = 5000;//in millis
     private static Random rand = new Random();
 
     private String name;
