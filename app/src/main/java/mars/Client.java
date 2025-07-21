@@ -4,7 +4,6 @@ import akka.actor.AbstractActor;
 import akka.actor.ActorRef;
 import akka.actor.Props;
 import mars.Node.GetResponse;
-import mars.Node.TimeoutMsg;
 import mars.Node.UpdateResponse;
 
 import java.io.Serializable;
