@@ -1,6 +1,5 @@
 package mars;
 
-import akka.Version;
 import akka.actor.AbstractActor;
 import akka.actor.ActorRef;
 import akka.actor.Props;
@@ -17,6 +16,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Random;
 
 /**
  * NOTE: a node stores a key only if the key is strictly less than the node itself
@@ -30,9 +30,14 @@ public class Node extends AbstractActor{
     private static final int N = 3,//replication factor
                              R = 2,//reading quorum 
                              W = 2,//writing quorum
-                             T = 1000;//in millis
-                    
-    enum State {
+                             T = 1000,//in millis
+                             MIN_DELAY = 100,//in millis
+                             MAX_DELAY = 200;//in millis
+                             //note that the max delay obtainable is MAX_DELAY + MIN_DELAY
+
+    private static Random random = new Random();
+
+    private enum State {
         JOIN,
         LEAVE,
         STABLE,
@@ -40,7 +45,7 @@ public class Node extends AbstractActor{
         RECOVERY,
     }
 
-    enum Quorum {
+    private enum Quorum {
         GET,
         UPDATE,
         GET_ACK,
@@ -51,10 +56,6 @@ public class Node extends AbstractActor{
     private Logger logger;
     private Map<Integer, VersionedValue> storage;
     public State state;//so that clients/nodes avoid to contact a crashed node and wait indefinetly
-    private boolean isQuorumReached;//as timeout msg is scheduled, check flag to determine 
-                                //if quorum has been reached before the timeout
-    private ActorRef client;//the client that makes the request
-    private VersionedValue latestValue;
     private final Map<UUID, PendingRequest> pendingGets = new HashMap<>();
     private final Map<UUID, PendingRequest> pendingUpdates = new HashMap<>();
 
@@ -198,7 +199,6 @@ public class Node extends AbstractActor{
         
         this.storage = new HashMap<>();
         this.state = State.JOIN;
-        this.isQuorumReached = false;
     }
 
     static public Props props(Integer name, Logger logger) {
@@ -337,6 +337,7 @@ public class Node extends AbstractActor{
             for (ActorRef node : this.peerList) {
                 if (node != getSelf()) {
                     node.tell(new PeersMsg(this.peerList, null, State.JOIN), getSelf());
+                    delay();
                 }
             }
         }
@@ -349,6 +350,18 @@ public class Node extends AbstractActor{
         waitingForResponses = false;//to ignore the timeout
         item_repartition_responses = 0;
         logger.log(this.name.toString() + " " + state, "Now STABLE in the network with " + this.peerList.size() + " nodes");
+    }
+
+    /**
+     * during unicast transmissions, add some delay
+     * to simulate the network
+     */
+    private static void delay(){
+        try{
+            Thread.sleep(random.nextInt(MAX_DELAY) + MIN_DELAY);
+        }catch(InterruptedException e){
+            System.err.println(e);
+        }
     }
 
     // BEHAVIOR -----------------------------------------
@@ -367,6 +380,7 @@ public class Node extends AbstractActor{
         ActorRef bootstrap = msg.bootstrap;
         logger.log(this.name.toString() + " " + this.state, "Requesting peers list from " + bootstrap.path().name());
         bootstrap.tell(new RequestPeersMsg(), getSelf());
+        delay();
     }
 
     /**
@@ -403,6 +417,7 @@ public class Node extends AbstractActor{
         for (ActorRef node : newPeerList) {
             Map<Integer, VersionedValue> payload = nodeToDataMap.getOrDefault(node, new HashMap<>());
             node.tell(new PeersMsg(newPeerList, payload, State.LEAVE), getSelf());
+            delay();
             logger.log(this.name.toString()  + " " + this.state, "Tell " + node.path().name() + " to update peer list (+ storage)");
         }
 
@@ -433,6 +448,7 @@ public class Node extends AbstractActor{
         //ask the recover node for the peer list
         //and then forget/request items based on such list
         msg.recoverNode.tell(new RequestPeersMsg(), getSelf());
+        delay();
     }
 
     // --- SERVICE HANDLERS -------------------------------
@@ -454,13 +470,14 @@ public class Node extends AbstractActor{
         for(ActorRef node : replicas){
             node.tell(new QuorumRequestMsg(msg.key, new VersionedValue(msg.value, -1), Quorum.UPDATE, requestId), getSelf());
             logger.log(this.name.toString() + " " + this.state, "Sending UPDATE request to node " + node.path().name());
+            delay();
         }
 
         //schedule timeout to check if quorum is valid
         getContext().getSystem().scheduler().scheduleOnce(
             Duration.create(T, TimeUnit.MILLISECONDS),
             getSelf(),
-            new QuorumTimeoutMsg(Quorum.GET, requestId),
+            new QuorumTimeoutMsg(Quorum.UPDATE, requestId),
             getContext().getSystem().dispatcher(),
             ActorRef.noSender()
         );
@@ -484,13 +501,14 @@ public class Node extends AbstractActor{
         for(ActorRef node : replicas){
             node.tell(new QuorumRequestMsg(msg.key, null, Quorum.GET, requestId), getSelf());
             logger.log(this.name.toString() + " " + this.state, "Sending GET request to node " + node.path().name());
+            delay();
         }
 
         //schedule timeout to check if quorum is valid
         getContext().getSystem().scheduler().scheduleOnce(
             Duration.create(T, TimeUnit.MILLISECONDS),
             getSelf(),
-            new QuorumTimeoutMsg(Quorum.UPDATE, requestId),
+            new QuorumTimeoutMsg(Quorum.GET, requestId),
             getContext().getSystem().dispatcher(),
             ActorRef.noSender()
         );
@@ -504,6 +522,7 @@ public class Node extends AbstractActor{
     public void onRequestPeersMsg(RequestPeersMsg msg){
         // the bootstrap simply send back its list of peers
         getSender().tell(new PeersMsg(this.peerList, null, State.STABLE), getSelf());
+        delay();
     }
 
     /**
@@ -563,6 +582,7 @@ public class Node extends AbstractActor{
                 int idx = (selfIndex + i) % peers.size();
                 peers.get(idx).tell(new ItemsRequestMsg(), getSelf());
                 logger.log(this.name + " " + this.state, "Requesting storage from " + peers.get(idx).path().name());
+                delay();
             }
 
             //schedule timeout
@@ -594,6 +614,7 @@ public class Node extends AbstractActor{
             int index = (startingIndex + i) % list.size();
             list.get(index).tell(new ItemsRequestMsg(), getSelf());
             logger.log(this.name.toString() + " " + this.state, "Request storage to node " + list.get(index).path().name());
+            delay();
         }
 
         //schedule timeout
@@ -612,6 +633,7 @@ public class Node extends AbstractActor{
      */
     private void onItemsRequestMsg(ItemsRequestMsg msg){
         getSender().tell(new ItemRepartitioningMsg(this.storage), getSelf());
+        delay();
     }
 
     /**
@@ -635,6 +657,7 @@ public class Node extends AbstractActor{
             //the node responds to the coordinaotr with the stored value
             getSender().tell(new QuorumRequestMsg(msg.key, this.storage.get(msg.key), Quorum.GET_ACK, msg.requestId), getSelf());
             logger.log(this.name.toString() + " " + this.state, "Responding to GET request from " + getSender().path().name());
+            delay();
         } else if(msg.request == Quorum.UPDATE){
             //update request
             Integer version = 0;
@@ -648,6 +671,7 @@ public class Node extends AbstractActor{
             this.storage.put(msg.key, new VersionedValue(msg.value.value, ++version));
             getSender().tell(new QuorumRequestMsg(msg.key, this.storage.get(msg.key), Quorum.UPDATE_ACK, msg.requestId), getSelf());
             logger.log(this.name.toString() + " " + this.state, "Responding to UPDATE request from " + getSender().path().name());
+            delay();
         } else if(msg.request == Quorum.GET_ACK){
             //the coordinator is getting back and ack for get
             //check if value received is the latest version
@@ -665,6 +689,7 @@ public class Node extends AbstractActor{
                 pending.client.tell(new GetResponse(true, pending.latest.value, pending.latest.version), getSelf());
                 logger.log(this.name.toString() + " " + this.state, "GET request finalized");
                 pendingGets.remove(msg.requestId);
+                delay();
             }
         } else if(msg.request == Quorum.UPDATE_ACK){
             //the coordinator is getting back and ack for update
@@ -677,6 +702,7 @@ public class Node extends AbstractActor{
                 pending.client.tell(new UpdateResponse(true), getSelf());
                 logger.log(this.name.toString() + " " + this.state, "UPDATE request finalized");
                 pendingUpdates.remove(msg.requestId);
+                delay();
             }
         }
     }
@@ -726,13 +752,15 @@ public class Node extends AbstractActor{
                 pending.client.tell(new GetResponse(false, null, -1), getSelf());
                 logger.log(this.name.toString() + " " + this.state, "GET request TIMEOUT, no quorum");
                 pendingGets.remove(msg.requestId);//clean up
+                delay();
             }
         } else if (msg.request == Quorum.UPDATE) {
             PendingRequest pending = pendingUpdates.get(msg.requestId);
             if (pending != null && pending.responses < W) {
                 pending.client.tell(new UpdateResponse(false), getSelf());
                 logger.log(this.name.toString() + " " + this.state, "UPDATE request TIMEOUT, no quorum");
-                pendingUpdates.remove(msg.requestId);
+                pendingUpdates.remove(msg.requestId);//clean up
+                delay();
             }
         }
     }

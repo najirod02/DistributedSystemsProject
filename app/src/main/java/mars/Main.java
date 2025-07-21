@@ -35,27 +35,24 @@ public class Main {
         }
     }
 
-    //user.dir will make sure that all logs are generated inside the projet folder starting from app
+    //user.dir will make sure that all logs are generated inside the project folder starting from app
     private static final String LOGGER_FILE_BASE_PATH = System.getProperty("user.dir") + "/logs";
     private static final Random rand = new Random();
 
     public static void main(String[] args) {
-        // testing of logger, not required for main execution
-        // TestLogger testLogger = new TestLogger(LOGGER_FILE_BASE_PATH + "/test.txt");
-        // testLogger.runTest();
-
-        // testing the components
+        //FIXME: try to make better tests
+        //at the moment it is hard to understand what is going on
+        //maybe leave uncommented the tests you want
+        //even better, wait for user input before starting new test
         final ActorSystem system = ActorSystem.create("marsakka");
-        
+
         Logger logger = new Logger(LOGGER_FILE_BASE_PATH + "/test.txt");
         List<ActorRef> nodeList = new ArrayList<ActorRef>();
 
-        // create some nodes and make them join the network through the correct message
-        //this will be used as the bootstrap for every new node
         System.out.println("Creating 40 - bootstrap");
         ActorRef bootstrap = system.actorOf(Node.props(40, logger), "40");
         nodeList.add(bootstrap);
-        
+
         System.out.println("Join 20 - 30 - 10");
         nodeList.add(system.actorOf(Node.props(20, logger), "20"));
         nodeList.get(1).tell(new JoinMsg(bootstrap), null);
@@ -69,59 +66,170 @@ public class Main {
         nodeList.get(3).tell(new JoinMsg(bootstrap), null);
         delay();
 
-        // create some clients and ask them to make some requests
-        // note that even if nodeList is not ordered like a ring, it doesn't
-        // matter as clients can ask anyone
         System.out.println("Creating clients");
         ActorRef client_1 = system.actorOf(Client.props("C1", logger, nodeList), "C1");
         ActorRef client_2 = system.actorOf(Client.props("C2", logger, nodeList), "C2");
 
-        client_1.tell(new UpdateMsg(10, "IRON"), null);
+        // SEQUENTIAL CONSISTENCY TEST
+        logger.log("MAIN", "SEQUENTIAL CONSISTENCY TEST");
+        System.out.println("START SEQUENTIAL CONSISTENCY TEST");
+        client_1.tell(new UpdateMsg(42, "GOLD"), null);
+        delay();
+        client_2.tell(new UpdateMsg(42, "SILVER"), null);
+        delay();
+        client_1.tell(new GetMsg(42), null);
+        delay();
+        client_2.tell(new GetMsg(42), null);
+        delay();
+        client_1.tell(new UpdateMsg(42, "PLATINUM"), null);
+        delay();
+        client_2.tell(new GetMsg(42), null);
+        delay();
+        client_1.tell(new GetMsg(42), null);
+        delay();
+        System.out.println("END SEQUENTIAL CONSISTENCY TEST");
+        delay(1000);
+
+        // CRASH & RECOVERY
+        logger.log("MAIN", "CRASH & RECOVERY");
+        System.out.println("Crashing node 20");
+        nodeList.get(1).tell(new CrashMsg(), null);
+        delay();
+        System.out.println("Client 1 attempts update on key 10 (should fail)");
+        client_1.tell(new UpdateMsg(10, "SILVER"), null);
+        delay();
+        System.out.println("Client 2 attempts get on key 10 (should fail)");
+        client_2.tell(new GetMsg(10), null);
+        delay();
+        System.out.println("Recovering node 20");
+        nodeList.get(1).tell(new RecoveryMsg(bootstrap), null);
+        delay();
+        System.out.println("Client 1 attempts update on key 10 (should succeed)");
+        client_1.tell(new UpdateMsg(10, "PLATINUM"), null);
+        delay();
+        System.out.println("Client 2 attempts get on key 10 (should succeed)");
+        client_2.tell(new GetMsg(10), null);
+        delay(1000);
+
+        // NODE LEAVE
+        logger.log("MAIN", "NODE LEAVE");
+        System.out.println("Node 20 leaving the network");
+        nodeList.get(1).tell(new LeaveMsg(), null);
+        delay();
+        System.out.println("Client 1 attempts update on key 9 after node 20 leaves (should fail)");
+        client_1.tell(new UpdateMsg(9, "BRONZE"), null);
+        delay(1000);
+
+        // QUORUM FAILURE TEST
+        logger.log("MAIN", "QUORUM FAILURE TEST");
+        System.out.println("=== START QUORUM FAILURE TEST ===");
+        System.out.println("Crashing node 20 and 30");
+        nodeList.get(1).tell(new CrashMsg(), null);
+        delay();
+        nodeList.get(2).tell(new CrashMsg(), null);
+        delay();
+        System.out.println("Client 1 attempts update with no quorum (should fail)");
+        client_1.tell(new UpdateMsg(88, "TUNGSTEN"), null);
+        delay();
+        System.out.println("Client 2 attempts get with no quorum (should fail)");
+        client_2.tell(new GetMsg(88), null);
+        delay();
+        System.out.println("Recovering node 20 and 30");
+        nodeList.get(1).tell(new RecoveryMsg(bootstrap), null);
+        delay();
+        nodeList.get(2).tell(new RecoveryMsg(bootstrap), null);
+        delay();
+        System.out.println("Client 1 retries update after recovery (should succeed)");
+        client_1.tell(new UpdateMsg(88, "URANIUM"), null);
+        delay();
+        System.out.println("Client 2 retries get after recovery (should see URANIUM)");
+        client_2.tell(new GetMsg(88), null);
+        delay();
+        System.out.println("=== END QUORUM FAILURE TEST ===");
+        delay(1000);
+
+        // ADDITIONAL EDGE TESTS
+        logger.log("MAIN", "ADDITIONAL EDGE TESTS");
+        System.out.println("Concurrent writes to same key");
+        client_1.tell(new UpdateMsg(55, "ZINC"), null);
+        client_2.tell(new UpdateMsg(55, "COPPER"), null);
+        delay();
+        System.out.println("Reading value after concurrent writes");
+        client_1.tell(new GetMsg(55), null);
         delay();
 
-        client_2.tell(new UpdateMsg(10, "IRON++"), null);
+        System.out.println("Update and multiple gets for stability");
+        client_1.tell(new UpdateMsg(77, "IRON"), null);
+        delay();
+        client_2.tell(new GetMsg(77), null);
+        delay();
+        client_2.tell(new GetMsg(77), null);
+        delay();
+        client_2.tell(new GetMsg(77), null);
         delay();
 
-        client_1.tell(new GetMsg(10), null);
+        System.out.println("GET on unknown key (should fail gracefully or return null)");
+        client_1.tell(new GetMsg(9999), null);
         delay();
 
-        // client_1.tell(new UpdateMsg(10, "IRON++"), null);
-        // delay();
+        System.out.println("Crash one node, then update");
+        nodeList.get(1).tell(new CrashMsg(), null);
+        delay();
+        client_1.tell(new UpdateMsg(123, "ALUMINUM"), null);
+        delay();
+        System.out.println("Crash another node, now quorum lost");
+        nodeList.get(2).tell(new CrashMsg(), null);
+        delay();
+        client_2.tell(new GetMsg(123), null);
+        delay();
 
-        // client_1.tell(new UpdateMsg(9, "GOLD"), null);
-        // delay();
+        System.out.println("Write, then have a responsible replica leave");
+        client_1.tell(new UpdateMsg(200, "LEAD"), null);
+        delay();
+        System.out.println("Node 10 leaves");
+        nodeList.get(3).tell(new LeaveMsg(), null);
+        delay();
+        client_2.tell(new GetMsg(200), null);
+        delay();
 
-        // client_2.tell(new UpdateMsg(34, "COPPER"), null);
-        // delay();
+        System.out.println("Simultaneous leave and recovery");
+        nodeList.get(1).tell(new LeaveMsg(), null);
+        delay();
+        nodeList.get(2).tell(new RecoveryMsg(bootstrap), null);
+        delay();
+        client_1.tell(new UpdateMsg(300, "NICKEL"), null);
+        delay();
+        client_2.tell(new GetMsg(300), null);
+        delay(1000);
 
-        // client_2.tell(new GetMsg(34), null);
-        // delay();
+        // === QUORUM TIMEOUT TEST ===
+        logger.log("MAIN", "QUORUM TIMEOUT TEST");
+        System.out.println("=== START QUORUM TIMEOUT TEST ===");
 
-        // //crash 20 and recover it
-        // System.out.println("Crash 20 and recover");
-        // nodeList.get(1).tell(new CrashMsg(), null);
-        // delay();
-        // nodeList.get(1).tell(new RecoveryMsg(bootstrap), null);
-        // delay();
+        System.out.println("Crashing node 20 and 30");
+        nodeList.get(1).tell(new CrashMsg(), null);
+        nodeList.get(2).tell(new CrashMsg(), null);
+        delay(500);
 
-        System.out.println("Print network storage");
-        for(ActorRef node : nodeList){
+        System.out.println("Client 1 attempts update with no quorum (simulate timeout)");
+        client_1.tell(new UpdateMsg(500, "RHODIUM"), null);
+
+        // Wait longer to simulate timeout (client waits but quorum can't form)
+        //delay(2000);
+
+        System.out.println("Client 2 attempts get after expected timeout");
+        client_2.tell(new GetMsg(500), null);
+        delay();
+
+        System.out.println("=== END QUORUM TIMEOUT TEST ===");
+        delay(1000);
+
+        System.out.println("Print network storage after tests");
+        for (ActorRef node : nodeList) {
             node.tell(new LogStorage(), null);
         }
-        delay();
+        delay(10000);
 
-        // System.out.println("Leave 20");
-        // nodeList.get(1).tell(new LeaveMsg(), null);
-        // delay();
-
-        // System.out.println("Print network storage after 20 leaving");
-        // for(ActorRef node : nodeList){
-        //     node.tell(new LogStorage(), null);
-        // }
-        // delay();
-
-        //make sure that all the last writes are done before closing the stream
-        //to be sure, put a delay before closing the stream
         logger.closeStream();
         system.terminate();
     }

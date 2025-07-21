@@ -16,7 +16,8 @@ import java.util.concurrent.TimeUnit;
 import scala.concurrent.duration.Duration;
 
 public class Client extends AbstractActor{
-    private static final long TIMEOUT = 5000;//in millis
+    private static final long TIMEOUT = 10000;//in millis, should be large enough to 
+                                             //allow coordinator to respond even with maximum delay
     private static Random rand = new Random();
 
     private String name;
@@ -130,7 +131,10 @@ public class Client extends AbstractActor{
                 logger.log(this.name, "Get request to " + getSender().path().name() + " is NOT valid");
                 return;
             }
-            logger.log(this.name, "Retrieved: " + msg.value + " with version " + msg.version + " from " + getSender().path().name());
+            if(msg.value != null)
+                logger.log(this.name, "Retrieved: " + msg.value + " with version " + msg.version + " from " + getSender().path().name());
+            else
+                logger.log(this.name, "Retrieved nothing from " + getSender().path().name());
         }
     }
 
