@@ -60,6 +60,45 @@ public class Node extends AbstractActor{
     // MESSAGES --------------------------------------------
     public static class TimeoutMsg implements Serializable {}
 
+    // --- STATE MESSAGES -------------------------------
+    public static class JoinMsg implements Serializable {
+        public final ActorRef bootstrap;
+        public JoinMsg(ActorRef bootstrap){
+            this.bootstrap = bootstrap;
+        }
+    }
+
+    public static class LeaveMsg implements Serializable {}
+
+    public static class CrashMsg implements Serializable {}
+
+    public static class RecoveryMsg implements Serializable {
+        private final ActorRef recoverNode;//the one to ask for the peer list
+        public RecoveryMsg(ActorRef recoverNode){
+            this.recoverNode = recoverNode;
+        }
+    }
+    
+    // --- SERVICE MESSAGES -------------------------------
+    public static class UpdateResponse implements Serializable {
+            public final boolean isValid;
+            public UpdateResponse(boolean isValid){
+                this.isValid = isValid;
+            }
+        }
+    
+    public static class GetResponse implements Serializable{
+            public final boolean isValid;
+            public final String value;
+            public final Integer version;
+            public GetResponse(boolean isValid, String value, Integer version){
+                this.isValid = isValid;
+                this.value = value;
+                this.version = version;
+            }
+        }
+
+    // --- PROCEDURE MESSAGES -------------------------------
     public static class RequestPeersMsg implements Serializable {}
 
     public static class PeersMsg implements Serializable {
@@ -73,39 +112,12 @@ public class Node extends AbstractActor{
         }
     }
 
-    public static class JoinMsg implements Serializable {
-        public final ActorRef bootstrap;
-        public JoinMsg(ActorRef bootstrap){
-            this.bootstrap = bootstrap;
-        }
-    }
-
-    public static class LeaveMsg implements Serializable {}
-
     public static class ItemsRequestMsg implements Serializable {}
 
     public static class ItemRepartitioningMsg implements Serializable {
         public final Map<Integer, VersionedValue> storage;
         public ItemRepartitioningMsg(Map<Integer, VersionedValue> storage){
             this.storage = storage;
-        }
-    }
-
-    public static class UpdateResponse implements Serializable {
-        public final boolean isValid;
-        public UpdateResponse(boolean isValid){
-            this.isValid = isValid;
-        }
-    }
-
-    public static class GetResponse implements Serializable{
-        public final boolean isValid;
-        public final String value;
-        public final Integer version;
-        public GetResponse(boolean isValid, String value, Integer version){
-            this.isValid = isValid;
-            this.value = value;
-            this.version = version;
         }
     }
 
@@ -248,6 +260,8 @@ public class Node extends AbstractActor{
     }
 
     // BEHAVIOR -----------------------------------------
+
+    // --- STATE HANDLERS -------------------------------
     /**
      * message send from the main to tell the node to join the network
      * it requires to obtain the peer list from a given bootstrap
@@ -306,6 +320,66 @@ public class Node extends AbstractActor{
         logger.log(this.name.toString()  + " " + this.state, "Left the network and cleared peer list and storage");
     }
 
+    /**
+     * when requested, the node will enter in a crashed state
+     * @param msg
+     */
+    private void onCrashMsg(CrashMsg msg){
+        this.state = State.CRASH;
+        getContext().become(crashed());
+        logger.log(this.name.toString() + " " + this.state, "Node crashed");
+    }
+
+    /**
+     * when requested, the node will enter in a recovery mode
+     * @param msg
+     */
+    private void onRecoverMsg(RecoveryMsg msg){
+        this.state = State.RECOVERY;
+        getContext().become(recovered());
+        logger.log(this.name.toString() + " " + this.state, "Node is recovering from node " + msg.recoverNode.path().name());
+        //TODO: actually implement the recovering procedure
+        //...code here ...
+        this.state = State.JOIN;
+        getContext().become(createReceive());
+        logger.log(this.name.toString() + " " + this.state, "Node has recovered");
+    }
+
+    // --- SERVICE HANDLERS -------------------------------
+    //TODO: finish the quorum logic
+    //logic about that keys must be less than the node name unless we need to wrap around
+    private void onUpdateMsg(UpdateMsg msg){
+        Integer version = 0;
+        //check if the item is already stored
+        VersionedValue item = storage.get(msg.key);
+        if(item != null){
+            version = item.version;
+        }
+        //in both cases increment so that if it is the first time, it will
+        //have version 1 otherwise, it will be incremented by 1
+        storage.put(msg.key, new VersionedValue(msg.value, ++version));
+
+        //respond to client
+        getSender().tell(new UpdateResponse(true), getSelf());
+        logger.log(this.name.toString() + " " + this.state, "Finished update request for " + getSender().path().name());
+    }
+
+    //TODO: finish the quorum logic
+    private void onGetMsg(GetMsg msg){
+        VersionedValue item = storage.get(msg.key);
+
+        //respond to client
+        if(item == null){
+            //doesn't exist or no quorum
+            getSender().tell(new GetResponse(false, null, -1), getSelf());
+            logger.log(this.name.toString() + " " + this.state, "Finished get request for " + getSender().path().name() + " with ERROR");
+        } else {
+            getSender().tell(new GetResponse(true, item.value, item.version), getSelf());
+            logger.log(this.name.toString() + " " + this.state, "Finished get request for " + getSender().path().name());
+        }
+    }
+
+    // --- PROCEDURE HANDLERS -------------------------------
     /**
      * the bootstrap will wait for this message in order to return the peer list
      * @param msg contains the latest peer list
@@ -408,60 +482,25 @@ public class Node extends AbstractActor{
         } 
     }
 
-    //TODO: finish the quorum logic
-    //logic about that keys must be less than the node name unless we need to wrap around
-    private void onUpdateMsg(UpdateMsg msg){
-        Integer version = 0;
-        //check if the item is already stored
-        VersionedValue item = storage.get(msg.key);
-        if(item != null){
-            version = item.version;
-        }
-        //in both cases increment so that if it is the first time, it will
-        //have version 1 otherwise, it will be incremented by 1
-        storage.put(msg.key, new VersionedValue(msg.value, ++version));
-
-        //respond to client
-        getSender().tell(new UpdateResponse(true), getSelf());
-        logger.log(this.name.toString() + " " + this.state, "Finished update request for " + getSender().path().name());
-    }
-
-    //TODO: finish the quorum logic
-    private void onGetMsg(GetMsg msg){
-        VersionedValue item = storage.get(msg.key);
-
-        //respond to client
-        if(item == null){
-            //doesn't exist or no quorum
-            getSender().tell(new GetResponse(false, null, -1), getSelf());
-            logger.log(this.name.toString() + " " + this.state, "Finished get request for " + getSender().path().name() + " with ERROR");
-        } else {
-            getSender().tell(new GetResponse(true, item.value, item.version), getSelf());
-            logger.log(this.name.toString() + " " + this.state, "Finished get request for " + getSender().path().name());
-        }
-    }
-
-    /**
-     * when requested, the node will enter in a crashed state
-     * where specific methods are available
-     */
-    private void crash(){
-        getContext().become(crashed());
-        this.state = State.CRASH;
-    }
-
     //define the mapping between the received message types and actor methods
     @Override
     public Receive createReceive() {
       return receiveBuilder()
+        //state handlers
         .match(JoinMsg.class, this::onJoinMsg)
         .match(LeaveMsg.class, this::onLeaveMsg)
+        .match(CrashMsg.class, this::onCrashMsg)
+
+        //service handlers
+        .match(UpdateMsg.class, this::onUpdateMsg)
+        .match(GetMsg.class, this::onGetMsg)
+
+        //procedure handlers
         .match(RequestPeersMsg.class, this::onRequestPeersMsg)
         .match(PeersMsg.class, this::onPeersMsg)
         .match(ItemsRequestMsg.class, this::onItemsRequestMsg)
         .match(ItemRepartitioningMsg.class, this::onItemRepartitioningMsg)
-        .match(UpdateMsg.class, this::onUpdateMsg)
-        .match(GetMsg.class, this::onGetMsg)
+        
         .matchAny(msg -> {
             //any other message is ignored
         })
@@ -470,7 +509,18 @@ public class Node extends AbstractActor{
 
     final AbstractActor.Receive crashed(){
         return receiveBuilder()
-            .matchAny(msg -> {})
+            .match(RecoveryMsg.class, this::onRecoverMsg)
+            .matchAny(msg -> {
+                //any other message is ignored
+            })
+            .build();
+    }
+
+    final AbstractActor.Receive recovered(){
+        return receiveBuilder()
+            .matchAny(msg -> {
+                //any other message is ignored
+            })
             .build();
     }
 
