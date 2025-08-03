@@ -18,6 +18,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Random;
 
+//TODO: Swap the order of tell and delay
 /**
  * NOTE: a node stores a key only if the key is strictly less than the node itself
  * 
@@ -93,11 +94,11 @@ public class Node extends AbstractActor{
     
     private class ProposedVersion {
         public Integer version;
-        public ActorRef coordinator;
+        public UUID requestId;
 
-        public ProposedVersion(Integer version, ActorRef coordinator) {
+        public ProposedVersion(Integer version, UUID requestId) {
             this.version = version;
-            this.coordinator = coordinator;
+            this.requestId = requestId;
         }
     }
 
@@ -471,8 +472,7 @@ public class Node extends AbstractActor{
     }
 
     // --- SERVICE HANDLERS -------------------------------
-    //TODO: Implement Queue for Coordinator
-    //We implement queue to reduce probability of REJECT
+    //TODO: Ask for the latest version of the key
     private void onUpdateMsg(UpdateMsg msg){
         logger.log(this.name.toString() + " " + this.state, "Received UPDATE request from " + getSender().path().name());
         
@@ -672,15 +672,23 @@ public class Node extends AbstractActor{
     }
 
     private void onQuorumRequestMsg(QuorumRequestMsg msg){
-        // TODO: Fix Read/Write conflicts
+        // DONE: Fix Read/Write conflicts
         // Idea: Just reject READ
         if(msg.request == Quorum.GET){
             //get request
             //the node responds to the coordinator with the stored value
-            getSender().tell(new QuorumRequestMsg(msg.key, this.storage.get(msg.key), Quorum.GET_ACK, msg.requestId), getSelf());
-            logger.log(this.name.toString() + " " + this.state, "Responding to GET request from " + getSender().path().name());
-            delay();
+            if(!proposedVersions.containsKey(msg.key)) {
+                getSender().tell(new QuorumRequestMsg(msg.key, this.storage.get(msg.key), Quorum.GET_ACK, msg.requestId), getSelf());
+                logger.log(this.name.toString() + " " + this.state, "Responding to GET request from " + getSender().path().name());
+                delay();
+            }
+            else {
+                //if the key is already proposed, it means that the node is in the middle of an UPDATE
+                //so it cannot respond to GET requests
+                logger.log(this.name.toString() + " " + this.state, "Ignoring GET request from " + getSender().path().name() + " (key already proposed)");
+            }
         } else if(msg.request == Quorum.UPDATE){
+            System.out.println("Received UPDATE request from " + getSender().path().name() + " for key " + msg.key + " with value " + msg.value.value + " and version " + msg.value.version);
             //update request
             Integer stored_version = 0;
             //check if the item is already stored
@@ -690,18 +698,22 @@ public class Node extends AbstractActor{
             }
             //in both cases increment so that if it is the first time, it will
             //have version 1 otherwise, it will be incremented by 1
-            // TODO: Reply with success only if the proposed version is greater than the current stored version
-            // TODO: and of the version of the last UPDATE request.  
+            // DONE: Reply with success only if the proposed version is greater than the current stored version
+            // DONE: and of the version of the last UPDATE request.  
             
-            ActorRef coordinator = getSender();
             if(stored_version < msg.value.version && (!proposedVersions.containsKey(msg.key) || 
             proposedVersions.get(msg.key).version < msg.value.version)) {
                 //Note that if you jump a version before committing, sequential consistency is not violated.
-                ProposedVersion proposedVersion = new ProposedVersion(msg.value.version, coordinator);
+                ProposedVersion proposedVersion = new ProposedVersion(msg.value.version, msg.requestId);
                 proposedVersions.put(msg.key, proposedVersion);
                 getSender().tell(new QuorumRequestMsg(msg.key, this.storage.get(msg.key), Quorum.UPDATE_ACK, msg.requestId), getSelf());
                 logger.log(this.name.toString() + " " + this.state, "Responding to UPDATE request from " + getSender().path().name());
                 delay();
+            }
+            else {
+                //if the version is not greater, just ignore the request
+                //and send an UPDATE_REJECT to the coordinator
+                logger.log(this.name.toString() + " " + this.state, "Ignoring UPDATE request from " + getSender().path().name() + " (version not greater)");
             }
             
         } else if(msg.request == Quorum.GET_ACK){
@@ -730,7 +742,7 @@ public class Node extends AbstractActor{
             if(pending == null) return;//in case of errors
 
             if(++pending.responses == W){
-                //TODO:quorum reached, send confirmation to nodes         
+                //DONE:quorum reached, send confirmation to nodes         
                 List<ActorRef> peers = setToList(this.peerList);
                 int firstReplicaIndex = findResponsibleReplicaIndex(msg.key, peers);
                 List<ActorRef> replicas = getNextN(peers, firstReplicaIndex);
@@ -768,20 +780,26 @@ public class Node extends AbstractActor{
             }
             //Because of FIFO and reliable channels, it cannot happen that proposedVersions.get(msg.key).version < msg.value.version
             //Neither that proposedVersions.get(msg.key) == null
-            //The coordinator always sends 
-            if(proposedVersions.get(msg.key).version == msg.value.version) {
+            if(proposedVersions.get(msg.key).version < msg.value.version) {
+                throw new IllegalStateException("Proposed version is less than the stored version. This should not happen due to FIFO and reliable channels guarantees.");
+            }
+            else if(proposedVersions.get(msg.key).version == msg.value.version) {
                 proposedVersions.remove(msg.key);
             }
         }
         else if(msg.request == Quorum.UPDATE_REJECT) {
             //the replica gets a reject from the coordinator
             // DONE
-            //Note that the coordinator is assumed to process one version at a time. This means that the coordinator
-            //will either CONFIRM or REJECT the proposed version before proposing a new one.
-            //TODO: Use UUID instead of coordinator (Maybe not necessary)
-            if(proposedVersions.get(msg.key).coordinator == getSender()) {
-                //if the proposed version is the same as the one stored, remove it
-                proposedVersions.remove(msg.key);
+            //DONE: Use UUID instead of coordinator
+            System.out.println(proposedVersions.get(msg.key));
+            try {
+                if(proposedVersions.get(msg.key).requestId == msg.requestId) {
+                    //if the proposed version is the same as the one stored, remove it
+                    proposedVersions.remove(msg.key);
+                }
+            }
+            catch (NullPointerException e) {
+                throw new IllegalStateException("FIFO and reliable channels guarantees violated.");
             }
         }
     }
