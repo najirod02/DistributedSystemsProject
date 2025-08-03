@@ -49,7 +49,9 @@ public class Node extends AbstractActor{
         GET,
         UPDATE,
         GET_ACK,
-        UPDATE_ACK
+        UPDATE_ACK,
+        UPDATE_CONFIRM,//used to confirm the update to the replicas
+        UPDATE_REJECT,//used to reject the update to the replicas
     }
 
     private Integer name;
@@ -58,6 +60,10 @@ public class Node extends AbstractActor{
     public State state;//so that clients/nodes avoid to contact a crashed node and wait indefinetly
     private final Map<UUID, PendingRequest> pendingGets = new HashMap<>();
     private final Map<UUID, PendingRequest> pendingUpdates = new HashMap<>();
+    // used to track the latest proposed non-commited version of each key
+    // key -> version
+    //Note that, because of the assumptions, the replica will always Leave/Crash with porposedVersions empty.
+    private final Map<Integer, ProposedVersion> proposedVersions = new HashMap<>();
 
     private Set<ActorRef> peerList;//contains also yourself
 
@@ -82,6 +88,16 @@ public class Node extends AbstractActor{
 
         public PendingRequest(ActorRef client) {
             this.client = client;
+        }
+    }
+    
+    private class ProposedVersion {
+        public Integer version;
+        public ActorRef coordinator;
+
+        public ProposedVersion(Integer version, ActorRef coordinator) {
+            this.version = version;
+            this.coordinator = coordinator;
         }
     }
 
@@ -167,9 +183,11 @@ public class Node extends AbstractActor{
     public static class TimeoutMsg implements Serializable {}
 
     public static class QuorumTimeoutMsg implements Serializable {
+        public final Integer key;
         public final Quorum request;
         public final UUID requestId;
-        public QuorumTimeoutMsg(Quorum request, UUID requestId){
+        public QuorumTimeoutMsg(Integer key, Quorum request, UUID requestId){
+            this.key = key;
             this.request = request;
             this.requestId = requestId;
         }
@@ -296,7 +314,8 @@ public class Node extends AbstractActor{
         ArrayList<ActorRef> sortedNodes = new ArrayList<>(this.peerList);
 
         Set<Integer> keysToRemove = new TreeSet<>();
-
+        
+        // TODO: use isResponsible method to check if the node is responsible for the key instead of manually checking?
         for (Integer key : this.storage.keySet()) {
             //determine the first node responsible for this key
             //find the first node with name >= key (wrap if necessary)
@@ -452,7 +471,8 @@ public class Node extends AbstractActor{
     }
 
     // --- SERVICE HANDLERS -------------------------------
-
+    //TODO: Implement Queue for Coordinator
+    //We implement queue to reduce probability of REJECT
     private void onUpdateMsg(UpdateMsg msg){
         logger.log(this.name.toString() + " " + this.state, "Received UPDATE request from " + getSender().path().name());
         
@@ -477,7 +497,7 @@ public class Node extends AbstractActor{
         getContext().getSystem().scheduler().scheduleOnce(
             Duration.create(T, TimeUnit.MILLISECONDS),
             getSelf(),
-            new QuorumTimeoutMsg(Quorum.UPDATE, requestId),
+            new QuorumTimeoutMsg(msg.key, Quorum.UPDATE, requestId),
             getContext().getSystem().dispatcher(),
             ActorRef.noSender()
         );
@@ -508,7 +528,7 @@ public class Node extends AbstractActor{
         getContext().getSystem().scheduler().scheduleOnce(
             Duration.create(T, TimeUnit.MILLISECONDS),
             getSelf(),
-            new QuorumTimeoutMsg(Quorum.GET, requestId),
+            new QuorumTimeoutMsg(msg.key, Quorum.GET, requestId),
             getContext().getSystem().dispatcher(),
             ActorRef.noSender()
         );
@@ -652,26 +672,38 @@ public class Node extends AbstractActor{
     }
 
     private void onQuorumRequestMsg(QuorumRequestMsg msg){
+        // TODO: Fix Read/Write conflicts
+        // Idea: Just reject READ
         if(msg.request == Quorum.GET){
             //get request
-            //the node responds to the coordinaotr with the stored value
+            //the node responds to the coordinator with the stored value
             getSender().tell(new QuorumRequestMsg(msg.key, this.storage.get(msg.key), Quorum.GET_ACK, msg.requestId), getSelf());
             logger.log(this.name.toString() + " " + this.state, "Responding to GET request from " + getSender().path().name());
             delay();
         } else if(msg.request == Quorum.UPDATE){
             //update request
-            Integer version = 0;
+            Integer stored_version = 0;
             //check if the item is already stored
             VersionedValue item = storage.get(msg.key);
             if(item != null){
-                version = item.version;
+                stored_version = item.version;
             }
             //in both cases increment so that if it is the first time, it will
             //have version 1 otherwise, it will be incremented by 1
-            this.storage.put(msg.key, new VersionedValue(msg.value.value, ++version));
-            getSender().tell(new QuorumRequestMsg(msg.key, this.storage.get(msg.key), Quorum.UPDATE_ACK, msg.requestId), getSelf());
-            logger.log(this.name.toString() + " " + this.state, "Responding to UPDATE request from " + getSender().path().name());
-            delay();
+            // TODO: Reply with success only if the proposed version is greater than the current stored version
+            // TODO: and of the version of the last UPDATE request.  
+            
+            ActorRef coordinator = getSender();
+            if(stored_version < msg.value.version && (!proposedVersions.containsKey(msg.key) || 
+            proposedVersions.get(msg.key).version < msg.value.version)) {
+                //Note that if you jump a version before committing, sequential consistency is not violated.
+                ProposedVersion proposedVersion = new ProposedVersion(msg.value.version, coordinator);
+                proposedVersions.put(msg.key, proposedVersion);
+                getSender().tell(new QuorumRequestMsg(msg.key, this.storage.get(msg.key), Quorum.UPDATE_ACK, msg.requestId), getSelf());
+                logger.log(this.name.toString() + " " + this.state, "Responding to UPDATE request from " + getSender().path().name());
+                delay();
+            }
+            
         } else if(msg.request == Quorum.GET_ACK){
             //the coordinator is getting back and ack for get
             //check if value received is the latest version
@@ -698,11 +730,58 @@ public class Node extends AbstractActor{
             if(pending == null) return;//in case of errors
 
             if(++pending.responses == W){
+                //TODO:quorum reached, send confirmation to nodes         
+                List<ActorRef> peers = setToList(this.peerList);
+                int firstReplicaIndex = findResponsibleReplicaIndex(msg.key, peers);
+                List<ActorRef> replicas = getNextN(peers, firstReplicaIndex);
+
+                for(ActorRef replica : replicas){
+                    replica.tell(new QuorumRequestMsg(msg.key, new VersionedValue(msg.value.value, msg.value.version), Quorum.UPDATE_CONFIRM, msg.requestId), getSelf());
+                    logger.log(this.name.toString() + " " + this.state, "Sending UPDATE ACK to node " + replica.path().name());
+                    delay();
+                }
+
                 //quorum reached, respond to client
                 pending.client.tell(new UpdateResponse(true), getSelf());
                 logger.log(this.name.toString() + " " + this.state, "UPDATE request finalized");
                 pendingUpdates.remove(msg.requestId);
                 delay();
+            }
+        }
+        // Note that, assuming that no node can crash during the UPDATE process, each node will eventually
+        // receive an UPDATE_CONFIRM or UPDATE_REJECT for each value stored in proposedVersions.
+        // If you don't include the Ref to the Coordinator in proposedVersions, it may happen that if another
+        // coordinator sends an UPDATE_REJECT for a key that was already proposed by another coordinator.
+        else if(msg.request == Quorum.UPDATE_CONFIRM) {
+            //the replica gets a confirmation or reject from the coordinator
+            // DONE: Write only if the version is greater than the one stored
+            // DONE: Because of quorum, the case where the version is equal should not happen
+            Integer stored_version = 0;
+            VersionedValue item = storage.get(msg.key);
+            if(item != null){
+                stored_version = item.version;
+            }
+            //We need this check in the case the COMMIT of the coordinator who proposed the version propagates
+            //faster than the COMMIT of the coordinator who proposed the previous version.
+            if(stored_version < msg.value.version) {
+                this.storage.put(msg.key, new VersionedValue(msg.value.value, ++stored_version)); 
+            }
+            //Because of FIFO and reliable channels, it cannot happen that proposedVersions.get(msg.key).version < msg.value.version
+            //Neither that proposedVersions.get(msg.key) == null
+            //The coordinator always sends 
+            if(proposedVersions.get(msg.key).version == msg.value.version) {
+                proposedVersions.remove(msg.key);
+            }
+        }
+        else if(msg.request == Quorum.UPDATE_REJECT) {
+            //the replica gets a reject from the coordinator
+            // DONE
+            //Note that the coordinator is assumed to process one version at a time. This means that the coordinator
+            //will either CONFIRM or REJECT the proposed version before proposing a new one.
+            //TODO: Use UUID instead of coordinator (Maybe not necessary)
+            if(proposedVersions.get(msg.key).coordinator == getSender()) {
+                //if the proposed version is the same as the one stored, remove it
+                proposedVersions.remove(msg.key);
             }
         }
     }
@@ -757,6 +836,18 @@ public class Node extends AbstractActor{
         } else if (msg.request == Quorum.UPDATE) {
             PendingRequest pending = pendingUpdates.get(msg.requestId);
             if (pending != null && pending.responses < W) {
+                // DONE: Send REJECT to the replicas
+                List<ActorRef> peers = setToList(this.peerList);
+                int firstReplicaIndex = findResponsibleReplicaIndex(msg.key, peers);
+                List<ActorRef> replicas = getNextN(peers, firstReplicaIndex);
+
+                for(ActorRef replica : replicas){
+                    replica.tell(new QuorumRequestMsg(msg.key, null, Quorum.UPDATE_REJECT, msg.requestId), getSelf());
+                    logger.log(this.name.toString() + " " + this.state, "Sending UPDATE REJECT to node " + replica.path().name());
+                    delay();
+                }
+
+                //Send reject to the client
                 pending.client.tell(new UpdateResponse(false), getSelf());
                 logger.log(this.name.toString() + " " + this.state, "UPDATE request TIMEOUT, no quorum");
                 pendingUpdates.remove(msg.requestId);//clean up
