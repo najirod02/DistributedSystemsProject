@@ -78,9 +78,9 @@ public class Main {
         client_1.tell(new UpdateMsg(42, "GOLD"), null);
         delay();
         client_2.tell(new UpdateMsg(42, "SILVER"), null);
-        delay(5000);
+        delay(1000);
 
-        /**
+
         // SEQUENTIAL CONSISTENCY TEST
         logger.log("MAIN", "SEQUENTIAL CONSISTENCY TEST");
         System.out.println("START SEQUENTIAL CONSISTENCY TEST");
@@ -99,7 +99,7 @@ public class Main {
         client_1.tell(new GetMsg(42), null);
         delay();
         System.out.println("END SEQUENTIAL CONSISTENCY TEST");
-        delay(5000);**/
+        delay(1000);
 
         /**
         // CRASH & RECOVERY
@@ -243,6 +243,7 @@ public class Main {
         delay(10000);
 
         **/
+        logger.log("MAIN", "TERMINATE");
         logger.closeStream();
         system.terminate();
     }

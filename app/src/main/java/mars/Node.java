@@ -84,11 +84,22 @@ public class Node extends AbstractActor{
 
     private class PendingRequest {
         public ActorRef client;
-        public VersionedValue latest = new VersionedValue(null, 0);
+        public Integer key;
+        public VersionedValue latest;
         public int responses = 0;
 
+        // For GET
         public PendingRequest(ActorRef client) {
             this.client = client;
+            this.key = null; // no key for GET
+            latest = new VersionedValue(null, 0); // no value for GET
+        }
+
+        // For UPDATE
+        public PendingRequest(ActorRef client, Integer key, String value) {
+            this.client = client;
+            this.key = key;
+            this.latest = new VersionedValue(value, -1);
         }
     }
     
@@ -519,10 +530,11 @@ public class Node extends AbstractActor{
         }
         
         //store the pending get request of the client
-        PendingRequest pending = new PendingRequest(getSender());
+        PendingRequest pendingGet = new PendingRequest(getSender());
+        PendingRequest pendingUpdate = new PendingRequest(getSender(), msg.key, msg.value);
         UUID requestId = UUID.randomUUID();
-        pendingGets.put(requestId, pending);
-        pendingUpdates.put(requestId, pending);
+        pendingGets.put(requestId, pendingGet);
+        pendingUpdates.put(requestId, pendingUpdate);
 
         logger.log(this.name.toString() + " " + this.state, "Received UPDATE request from " + getSender().path().name() + " with ID " + requestId);
 
@@ -761,6 +773,7 @@ public class Node extends AbstractActor{
             if(++pending.responses == R){
                 if(!pendingUpdates.containsKey(msg.requestId)) {
                     //quorum reached, respond to client
+                    logger.log(this.name.toString() + " " + this.state, "Value " + pending.latest.value + " with version " + pending.latest.version + " is the latest for key " + msg.key);
                     pending.client.tell(new GetResponse(true, pending.latest.value, pending.latest.version), getSelf());
                     logger.log(this.name.toString() + " " + this.state, "GET request " + msg.requestId + " finalized");
                     pendingGets.remove(msg.requestId);
@@ -772,9 +785,10 @@ public class Node extends AbstractActor{
                     List<ActorRef> peers = setToList(this.peerList);
                     int firstReplicaIndex = findResponsibleReplicaIndex(msg.key, peers);
                     List<ActorRef> replicas = getNextN(peers, firstReplicaIndex);
-                    pendingGets.get(msg.requestId).responses = 0;
                     pendingGets.remove(msg.requestId);
-                    sendUpdateToReplicas(msg.requestId, msg.key, pending.latest.value, pending.latest.version + 1, replicas);
+
+                    PendingRequest pendingUpdate = pendingUpdates.get(msg.requestId);
+                    sendUpdateToReplicas(msg.requestId, pendingUpdate.key, pendingUpdate.latest.value, pending.latest.version + 1, replicas);
                 }
             }
         } else if(msg.request == Quorum.UPDATE_ACK){
