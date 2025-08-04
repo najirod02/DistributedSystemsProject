@@ -84,7 +84,7 @@ public class Node extends AbstractActor{
 
     private class PendingRequest {
         public ActorRef client;
-        public VersionedValue latest = new VersionedValue(null, -1);
+        public VersionedValue latest = new VersionedValue(null, 0);
         public int responses = 0;
 
         public PendingRequest(ActorRef client) {
@@ -429,12 +429,19 @@ public class Node extends AbstractActor{
      * @param msg the message containing the bootstrap node
      */
     private void onJoinMsg(JoinMsg msg){
+        logger.log(this.name.toString() + " " + this.state, "Joining the network");
         //msg will contain the bootstrap node to ask for the peer list
         this.state = State.JOIN;
-        ActorRef bootstrap = msg.bootstrap;
-        logger.log(this.name.toString() + " " + this.state, "Requesting peers list from " + bootstrap.path().name());
-        bootstrap.tell(new RequestPeersMsg(), getSelf());
-        delay();
+        if(msg.bootstrap != null) {
+            ActorRef bootstrap = msg.bootstrap;
+            logger.log(this.name.toString() + " " + this.state, "Requesting peers list from " + bootstrap.path().name());
+            bootstrap.tell(new RequestPeersMsg(), getSelf());
+            delay();
+        }
+        else {
+            this.state = State.STABLE;
+            logger.log(this.name.toString() + " " + state, "Now STABLE in the network with " + this.peerList.size() + " nodes");
+        }
     }
 
     /**
@@ -507,13 +514,17 @@ public class Node extends AbstractActor{
 
     // --- SERVICE HANDLERS -------------------------------
     private void onUpdateMsg(UpdateMsg msg){
-        logger.log(this.name.toString() + " " + this.state, "Received UPDATE request from " + getSender().path().name());
+        if(this.state != State.STABLE) {
+            throw new IllegalStateException("Node " + this.name + " is not in STABLE state, cannot process UPDATE request. Assumptions violated.");
+        }
         
         //store the pending get request of the client
         PendingRequest pending = new PendingRequest(getSender());
         UUID requestId = UUID.randomUUID();
         pendingGets.put(requestId, pending);
         pendingUpdates.put(requestId, pending);
+
+        logger.log(this.name.toString() + " " + this.state, "Received UPDATE request from " + getSender().path().name() + " with ID " + requestId);
 
         //send quorum request to replica nodes
         List<ActorRef> peers = setToList(this.peerList);
@@ -527,12 +538,16 @@ public class Node extends AbstractActor{
 
     //changing of variables 
     private void onGetMsg(GetMsg msg){
-        logger.log(this.name.toString() + " " + this.state, "Received GET request from " + getSender().path().name());
+        if(this.state != State.STABLE) {
+            throw new IllegalStateException("Node " + this.name + " is not in STABLE state, cannot process GET request. Assumptions violated.");
+        }
 
         //store the pending get request of the client
         PendingRequest pending = new PendingRequest(getSender());
         UUID requestId = UUID.randomUUID();
         pendingGets.put(requestId, pending);
+
+        logger.log(this.name.toString() + " " + this.state, "Received GET request from " + getSender().path().name() + " with ID " + requestId);
 
         //send quorum request to replica nodes
         List<ActorRef> peers = setToList(this.peerList);
@@ -625,7 +640,9 @@ public class Node extends AbstractActor{
             );
             return;
         }
-
+        if(this.state != State.JOIN) {
+            throw new IllegalStateException("Node " + this.name + " is not in STABLE nor RECOVERY nor JOIN state, cannot process PeersMsg. Assumptions violated.");
+        }
         //otherwise, likely this node just joined and is syncing from others
         this.peerList.addAll(msg.peerList);
         logger.log(this.name.toString() + " " + this.state, "Updated peer list with now " + this.peerList.size() + " nodes");
@@ -689,13 +706,13 @@ public class Node extends AbstractActor{
             //the node responds to the coordinator with the stored value
             if(!proposedVersions.containsKey(msg.key)) {
                 getSender().tell(new QuorumRequestMsg(msg.key, this.storage.get(msg.key), Quorum.GET_ACK, msg.requestId), getSelf());
-                logger.log(this.name.toString() + " " + this.state, "Responding to GET request from " + getSender().path().name());
+                logger.log(this.name.toString() + " " + this.state, "Responding to GET request from " + getSender().path().name() + " for request ID " + msg.requestId);
                 delay();
             }
             else {
                 //if the key is already proposed, it means that the node is in the middle of an UPDATE
                 //so it cannot respond to GET requests
-                logger.log(this.name.toString() + " " + this.state, "Ignoring GET request from " + getSender().path().name() + " (key already proposed)");
+                logger.log(this.name.toString() + " " + this.state, "Ignoring GET request " + msg.requestId + " from " + getSender().path().name() + " (key already proposed)");
             }
         } else if(msg.request == Quorum.UPDATE){
             // System.out.println("Received UPDATE request from " + getSender().path().name() + " for key " + msg.key + " with value " + msg.value.value + " and version " + msg.value.version);
@@ -716,14 +733,14 @@ public class Node extends AbstractActor{
                 //Note that if you jump a version before committing, sequential consistency is not violated.
                 ProposedVersion proposedVersion = new ProposedVersion(msg.value.version, msg.requestId);
                 proposedVersions.put(msg.key, proposedVersion);
-                getSender().tell(new QuorumRequestMsg(msg.key, this.storage.get(msg.key), Quorum.UPDATE_ACK, msg.requestId), getSelf());
-                logger.log(this.name.toString() + " " + this.state, "Responding to UPDATE request from " + getSender().path().name());
+                getSender().tell(new QuorumRequestMsg(msg.key, msg.value, Quorum.UPDATE_ACK, msg.requestId), getSelf());
+                logger.log(this.name.toString() + " " + this.state, "Responding to UPDATE request from " + getSender().path().name() + " for request ID " + msg.requestId + " with version " + msg.value.version);
                 delay();
             }
             else {
                 //if the version is not greater, just ignore the request
                 //and send an UPDATE_REJECT to the coordinator
-                logger.log(this.name.toString() + " " + this.state, "Ignoring UPDATE request from " + getSender().path().name() + " (version not greater)");
+                logger.log(this.name.toString() + " " + this.state, "Ignoring UPDATE request from " + getSender().path().name() + " for request ID " + msg.requestId + " (version not greater)");
             }
             
         } else if(msg.request == Quorum.GET_ACK){
@@ -738,12 +755,14 @@ public class Node extends AbstractActor{
                 pending.latest.value = msg.value.value;
             }
             
+            logger.log(this.name.toString() + " " + this.state, "Received GET_ACK from " + getSender().path().name() + " for request ID " + msg.requestId);
+
             //DONE: Case of GET for UPDATE
             if(++pending.responses == R){
                 if(!pendingUpdates.containsKey(msg.requestId)) {
                     //quorum reached, respond to client
                     pending.client.tell(new GetResponse(true, pending.latest.value, pending.latest.version), getSelf());
-                    logger.log(this.name.toString() + " " + this.state, "GET request finalized");
+                    logger.log(this.name.toString() + " " + this.state, "GET request " + msg.requestId + " finalized");
                     pendingGets.remove(msg.requestId);
                     delay();
                 } else {
@@ -753,6 +772,7 @@ public class Node extends AbstractActor{
                     List<ActorRef> peers = setToList(this.peerList);
                     int firstReplicaIndex = findResponsibleReplicaIndex(msg.key, peers);
                     List<ActorRef> replicas = getNextN(peers, firstReplicaIndex);
+                    pendingGets.get(msg.requestId).responses = 0;
                     pendingGets.remove(msg.requestId);
                     sendUpdateToReplicas(msg.requestId, msg.key, pending.latest.value, pending.latest.version + 1, replicas);
                 }
@@ -762,6 +782,9 @@ public class Node extends AbstractActor{
             PendingRequest pending = pendingUpdates.get(msg.requestId);
 
             if(pending == null) return;//in case of errors
+            
+            logger.log(this.name.toString() + " " + this.state, "Received UPDATE_ACK from " + getSender().path().name() + " for request ID " + msg.requestId);
+            logger.log(this.name.toString() + " " + this.state, "Pending Responses: " + pending.responses);
 
             if(++pending.responses == W){
                 //DONE:quorum reached, send confirmation to nodes         
@@ -771,13 +794,13 @@ public class Node extends AbstractActor{
 
                 for(ActorRef replica : replicas){
                     replica.tell(new QuorumRequestMsg(msg.key, new VersionedValue(msg.value.value, msg.value.version), Quorum.UPDATE_CONFIRM, msg.requestId), getSelf());
-                    logger.log(this.name.toString() + " " + this.state, "Sending UPDATE ACK to node " + replica.path().name());
+                    logger.log(this.name.toString() + " " + this.state, "Sending UPDATE ACK to node " + replica.path().name() + " for request ID " + msg.requestId);
                     delay();
                 }
 
                 //quorum reached, respond to client
                 pending.client.tell(new UpdateResponse(true), getSelf());
-                logger.log(this.name.toString() + " " + this.state, "UPDATE request finalized");
+                logger.log(this.name.toString() + " " + this.state, "UPDATE request " + msg.requestId + " finalized");
                 pendingUpdates.remove(msg.requestId);
                 delay();
             }
@@ -813,14 +836,9 @@ public class Node extends AbstractActor{
             //the replica gets a reject from the coordinator
             // DONE
             //DONE: Use UUID instead of coordinator
-            try {
-                if(proposedVersions.get(msg.key).requestId == msg.requestId) {
-                    //if the proposed version is the same as the one stored, remove it
-                    proposedVersions.remove(msg.key);
-                }
-            }
-            catch (NullPointerException e) {
-                throw new IllegalStateException("FIFO and reliable channels guarantees violated.");
+            if(proposedVersions.get(msg.key) != null && proposedVersions.get(msg.key).requestId == msg.requestId) {
+            //if the proposed version is the same as the one stored, remove it
+                proposedVersions.remove(msg.key);
             }
         }
     }
@@ -870,13 +888,13 @@ public class Node extends AbstractActor{
             if (pending != null && pending.responses < R) {
                 if(!pendingUpdates.containsKey(msg.requestId)) {
                     pending.client.tell(new GetResponse(false, null, -1), getSelf());
-                    logger.log(this.name.toString() + " " + this.state, "GET request TIMEOUT, no quorum");
+                    logger.log(this.name.toString() + " " + this.state, "GET request " + msg.requestId + " TIMEOUT, no quorum");
                     pendingGets.remove(msg.requestId);//clean up
                     delay();
                 }
                 else {
                     pending.client.tell(new UpdateResponse(false), getSelf());
-                    logger.log(this.name.toString() + " " + this.state, "GET request before UPDATE TIMEOUT, no quorum");
+                    logger.log(this.name.toString() + " " + this.state, "GET request before UPDATE " + msg.requestId + " TIMEOUT, no quorum");
                     pendingGets.remove(msg.requestId);//clean up
                     pendingUpdates.remove(msg.requestId);//clean up
                     delay();
@@ -892,13 +910,13 @@ public class Node extends AbstractActor{
 
                 for(ActorRef replica : replicas){
                     replica.tell(new QuorumRequestMsg(msg.key, null, Quorum.UPDATE_REJECT, msg.requestId), getSelf());
-                    logger.log(this.name.toString() + " " + this.state, "Sending UPDATE REJECT to node " + replica.path().name());
+                    logger.log(this.name.toString() + " " + this.state, "Sending UPDATE REJECT to node " + replica.path().name() + " for request ID " + msg.requestId);
                     delay();
                 }
 
                 //Send reject to the client
                 pending.client.tell(new UpdateResponse(false), getSelf());
-                logger.log(this.name.toString() + " " + this.state, "UPDATE request TIMEOUT, no quorum");
+                logger.log(this.name.toString() + " " + this.state, "UPDATE request " + msg.requestId + " TIMEOUT, no quorum");
                 pendingUpdates.remove(msg.requestId);//clean up
                 delay();
             }

@@ -51,45 +51,57 @@ public class Main {
 
         System.out.println("Creating 40 - bootstrap");
         ActorRef bootstrap = system.actorOf(Node.props(40, logger), "40");
+        bootstrap.tell(new Node.JoinMsg(null), null);
         nodeList.add(bootstrap);
+        delay(1000);
 
         System.out.println("Join 20 - 30 - 10");
         nodeList.add(system.actorOf(Node.props(20, logger), "20"));
         nodeList.get(1).tell(new JoinMsg(bootstrap), null);
-        delay();
+        delay(1000);
 
         nodeList.add(system.actorOf(Node.props(30, logger), "30"));
         nodeList.get(2).tell(new JoinMsg(bootstrap), null);
-        delay();
+        delay(1000);
 
         nodeList.add(system.actorOf(Node.props(10, logger), "10"));
         nodeList.get(3).tell(new JoinMsg(bootstrap), null);
-        delay();
+        delay(2000);
 
         System.out.println("Creating clients");
         ActorRef client_1 = system.actorOf(Client.props("C1", logger, nodeList), "C1");
         ActorRef client_2 = system.actorOf(Client.props("C2", logger, nodeList), "C2");
+        
+        // BASIC CONCURRENT UPDATE TEST
+        logger.log("MAIN", "BASIC CONCURRENT UPDATE TEST");
+        System.out.println("START BASIC CONCURRENT UPDATE TEST");
+        client_1.tell(new UpdateMsg(42, "GOLD"), null);
+        delay();
+        client_2.tell(new UpdateMsg(42, "SILVER"), null);
+        delay(5000);
 
+        /**
         // SEQUENTIAL CONSISTENCY TEST
         logger.log("MAIN", "SEQUENTIAL CONSISTENCY TEST");
         System.out.println("START SEQUENTIAL CONSISTENCY TEST");
         client_1.tell(new UpdateMsg(42, "GOLD"), null);
         delay();
         client_2.tell(new UpdateMsg(42, "SILVER"), null);
-        delay();
+        delay(10000);
         client_1.tell(new GetMsg(42), null);
         delay();
         client_2.tell(new GetMsg(42), null);
-        delay();
+        delay(2000);
         client_1.tell(new UpdateMsg(42, "PLATINUM"), null);
-        delay();
+        delay(2000);
         client_2.tell(new GetMsg(42), null);
         delay();
         client_1.tell(new GetMsg(42), null);
         delay();
         System.out.println("END SEQUENTIAL CONSISTENCY TEST");
-        delay(1000);
+        delay(5000);**/
 
+        /**
         // CRASH & RECOVERY
         logger.log("MAIN", "CRASH & RECOVERY");
         System.out.println("Crashing node 20");
@@ -230,6 +242,7 @@ public class Main {
         }
         delay(10000);
 
+        **/
         logger.closeStream();
         system.terminate();
     }
