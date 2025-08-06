@@ -367,8 +367,8 @@ public class Node extends AbstractActor{
         if (state == State.JOIN) {
             for (ActorRef node : this.peerList) {
                 if (node != getSelf()) {
-                    node.tell(new PeersMsg(this.peerList, null, State.JOIN), getSelf());
                     delay();
+                    node.tell(new PeersMsg(this.peerList, null, State.JOIN), getSelf());
                 }
             }
         }
@@ -385,9 +385,9 @@ public class Node extends AbstractActor{
 
     private void sendGetToReplicas(UUID requestId, Integer key, List<ActorRef> replicas) {
         for(ActorRef node : replicas){
-            node.tell(new QuorumRequestMsg(key, null, Quorum.GET, requestId), getSelf());
             logger.log(this.name.toString() + " " + this.state, "Sending GET request to node " + node.path().name());
             delay();
+            node.tell(new QuorumRequestMsg(key, null, Quorum.GET, requestId), getSelf());
         }
 
         //schedule timeout to check if quorum is valid
@@ -402,9 +402,9 @@ public class Node extends AbstractActor{
 
     private void sendUpdateToReplicas(UUID requestId, Integer key, String value, Integer version, List<ActorRef> replicas) {
         for(ActorRef node : replicas){
-            node.tell(new QuorumRequestMsg(key, new VersionedValue(value, version), Quorum.UPDATE, requestId), getSelf());
             logger.log(this.name.toString() + " " + this.state, "Sending UPDATE request to node " + node.path().name());
             delay();
+            node.tell(new QuorumRequestMsg(key, new VersionedValue(value, version), Quorum.UPDATE, requestId), getSelf());
         }
 
         //schedule timeout to check if quorum is valid
@@ -446,8 +446,8 @@ public class Node extends AbstractActor{
         if(msg.bootstrap != null) {
             ActorRef bootstrap = msg.bootstrap;
             logger.log(this.name.toString() + " " + this.state, "Requesting peers list from " + bootstrap.path().name());
-            bootstrap.tell(new RequestPeersMsg(), getSelf());
             delay();
+            bootstrap.tell(new RequestPeersMsg(), getSelf());
         }
         else {
             this.state = State.STABLE;
@@ -488,9 +488,9 @@ public class Node extends AbstractActor{
         //send peer list + specific data to each node
         for (ActorRef node : newPeerList) {
             Map<Integer, VersionedValue> payload = nodeToDataMap.getOrDefault(node, new HashMap<>());
-            node.tell(new PeersMsg(newPeerList, payload, State.LEAVE), getSelf());
-            delay();
             logger.log(this.name.toString()  + " " + this.state, "Tell " + node.path().name() + " to update peer list (+ storage)");
+            delay();
+            node.tell(new PeersMsg(newPeerList, payload, State.LEAVE), getSelf());
         }
 
         //update local peer list too not only of the other nodes
@@ -519,8 +519,8 @@ public class Node extends AbstractActor{
         logger.log(this.name.toString() + " " + this.state, "Node is recovering from node " + msg.recoverNode.path().name());
         //ask the recover node for the peer list
         //and then forget/request items based on such list
-        msg.recoverNode.tell(new RequestPeersMsg(), getSelf());
         delay();
+        msg.recoverNode.tell(new RequestPeersMsg(), getSelf());
     }
 
     // --- SERVICE HANDLERS -------------------------------
@@ -578,8 +578,8 @@ public class Node extends AbstractActor{
      */
     public void onRequestPeersMsg(RequestPeersMsg msg){
         // the bootstrap simply send back its list of peers
-        getSender().tell(new PeersMsg(this.peerList, null, State.STABLE), getSelf());
         delay();
+        getSender().tell(new PeersMsg(this.peerList, null, State.STABLE), getSelf());
     }
 
     /**
@@ -637,9 +637,9 @@ public class Node extends AbstractActor{
             waitingForResponses = true;
             for (int i = 1; i <= N; ++i) {
                 int idx = (selfIndex + i) % peers.size();
-                peers.get(idx).tell(new ItemsRequestMsg(), getSelf());
                 logger.log(this.name + " " + this.state, "Requesting storage from " + peers.get(idx).path().name());
                 delay();
+                peers.get(idx).tell(new ItemsRequestMsg(), getSelf());
             }
 
             //schedule timeout
@@ -671,9 +671,9 @@ public class Node extends AbstractActor{
         waitingForResponses = true;
         for (int i = 1; i <= N; ++i) {
             int index = (startingIndex + i) % list.size();
-            list.get(index).tell(new ItemsRequestMsg(), getSelf());
             logger.log(this.name.toString() + " " + this.state, "Request storage to node " + list.get(index).path().name());
             delay();
+            list.get(index).tell(new ItemsRequestMsg(), getSelf());
         }
 
         //schedule timeout
@@ -691,8 +691,8 @@ public class Node extends AbstractActor{
      * @param msg
      */
     private void onItemsRequestMsg(ItemsRequestMsg msg){
-        getSender().tell(new ItemRepartitioningMsg(this.storage), getSelf());
         delay();
+        getSender().tell(new ItemRepartitioningMsg(this.storage), getSelf());
     }
 
     /**
@@ -717,9 +717,9 @@ public class Node extends AbstractActor{
             //get request
             //the node responds to the coordinator with the stored value
             if(!proposedVersions.containsKey(msg.key)) {
-                getSender().tell(new QuorumRequestMsg(msg.key, this.storage.get(msg.key), Quorum.GET_ACK, msg.requestId), getSelf());
                 logger.log(this.name.toString() + " " + this.state, "Responding to GET request from " + getSender().path().name() + " for request ID " + msg.requestId);
                 delay();
+                getSender().tell(new QuorumRequestMsg(msg.key, this.storage.get(msg.key), Quorum.GET_ACK, msg.requestId), getSelf());
             }
             else {
                 //if the key is already proposed, it means that the node is in the middle of an UPDATE
@@ -745,9 +745,9 @@ public class Node extends AbstractActor{
                 //Note that if you jump a version before committing, sequential consistency is not violated.
                 ProposedVersion proposedVersion = new ProposedVersion(msg.value.version, msg.requestId);
                 proposedVersions.put(msg.key, proposedVersion);
-                getSender().tell(new QuorumRequestMsg(msg.key, msg.value, Quorum.UPDATE_ACK, msg.requestId), getSelf());
                 logger.log(this.name.toString() + " " + this.state, "Responding to UPDATE request from " + getSender().path().name() + " for request ID " + msg.requestId + " with version " + msg.value.version);
                 delay();
+                getSender().tell(new QuorumRequestMsg(msg.key, msg.value, Quorum.UPDATE_ACK, msg.requestId), getSelf());
             }
             else {
                 //if the version is not greater, just ignore the request
@@ -774,10 +774,10 @@ public class Node extends AbstractActor{
                 if(!pendingUpdates.containsKey(msg.requestId)) {
                     //quorum reached, respond to client
                     logger.log(this.name.toString() + " " + this.state, "Value " + pending.latest.value + " with version " + pending.latest.version + " is the latest for key " + msg.key);
-                    pending.client.tell(new GetResponse(true, pending.latest.value, pending.latest.version), getSelf());
                     logger.log(this.name.toString() + " " + this.state, "GET request " + msg.requestId + " finalized");
                     pendingGets.remove(msg.requestId);
                     delay();
+                    pending.client.tell(new GetResponse(true, pending.latest.value, pending.latest.version), getSelf());
                 } else {
                     //if it is for an UPDATE, do UPDATE
                     //send UPDATE to replicas
@@ -807,16 +807,16 @@ public class Node extends AbstractActor{
                 List<ActorRef> replicas = getNextN(peers, firstReplicaIndex);
 
                 for(ActorRef replica : replicas){
-                    replica.tell(new QuorumRequestMsg(msg.key, new VersionedValue(msg.value.value, msg.value.version), Quorum.UPDATE_CONFIRM, msg.requestId), getSelf());
                     logger.log(this.name.toString() + " " + this.state, "Sending UPDATE ACK to node " + replica.path().name() + " for request ID " + msg.requestId);
                     delay();
+                    replica.tell(new QuorumRequestMsg(msg.key, new VersionedValue(msg.value.value, msg.value.version), Quorum.UPDATE_CONFIRM, msg.requestId), getSelf());
                 }
 
                 //quorum reached, respond to client
-                pending.client.tell(new UpdateResponse(true), getSelf());
                 logger.log(this.name.toString() + " " + this.state, "UPDATE request " + msg.requestId + " finalized");
                 pendingUpdates.remove(msg.requestId);
                 delay();
+                pending.client.tell(new UpdateResponse(true), getSelf());
             }
         }
         // Note that, assuming that no node can crash during the UPDATE process, each node will eventually
@@ -904,17 +904,17 @@ public class Node extends AbstractActor{
             PendingRequest pending = pendingGets.get(msg.requestId);
             if (pending != null && pending.responses < R) {
                 if(!pendingUpdates.containsKey(msg.requestId)) {
-                    pending.client.tell(new GetResponse(false, null, -1), getSelf());
                     logger.log(this.name.toString() + " " + this.state, "GET request " + msg.requestId + " TIMEOUT, no quorum");
                     pendingGets.remove(msg.requestId);//clean up
                     delay();
+                    pending.client.tell(new GetResponse(false, null, -1), getSelf());
                 }
                 else {
-                    pending.client.tell(new UpdateResponse(false), getSelf());
                     logger.log(this.name.toString() + " " + this.state, "GET request before UPDATE " + msg.requestId + " TIMEOUT, no quorum");
                     pendingGets.remove(msg.requestId);//clean up
                     pendingUpdates.remove(msg.requestId);//clean up
                     delay();
+                    pending.client.tell(new UpdateResponse(false), getSelf());
                 }
             }
         } else if (msg.request == Quorum.UPDATE) {
@@ -926,16 +926,16 @@ public class Node extends AbstractActor{
                 List<ActorRef> replicas = getNextN(peers, firstReplicaIndex);
 
                 for(ActorRef replica : replicas){
-                    replica.tell(new QuorumRequestMsg(msg.key, null, Quorum.UPDATE_REJECT, msg.requestId), getSelf());
                     logger.log(this.name.toString() + " " + this.state, "Sending UPDATE REJECT to node " + replica.path().name() + " for request ID " + msg.requestId);
                     delay();
+                    replica.tell(new QuorumRequestMsg(msg.key, null, Quorum.UPDATE_REJECT, msg.requestId), getSelf());
                 }
 
                 //Send reject to the client
-                pending.client.tell(new UpdateResponse(false), getSelf());
                 logger.log(this.name.toString() + " " + this.state, "UPDATE request " + msg.requestId + " TIMEOUT, no quorum");
                 pendingUpdates.remove(msg.requestId);//clean up
                 delay();
+                pending.client.tell(new UpdateResponse(false), getSelf());
             }
         }
     }

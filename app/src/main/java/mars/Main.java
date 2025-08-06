@@ -84,26 +84,30 @@ public class Main {
         client_2.tell(new UpdateMsg(42, "SILVER"), null);
         delay(5000);
         */
-        /*
+        
         // SEQUENTIAL CONSISTENCY TEST
         logger.log("MAIN", "SEQUENTIAL CONSISTENCY TEST");
         System.out.println("START SEQUENTIAL CONSISTENCY TEST");
+
         client_1.tell(new UpdateMsg(42, "GOLD"), null);
         delay();
         client_2.tell(new UpdateMsg(42, "SILVER"), null);
         delay(10000);
+        
         client_1.tell(new GetMsg(42), null);
         delay();
         client_2.tell(new GetMsg(42), null);
-        delay(2000);
+        delay(10000);
+        
         client_1.tell(new UpdateMsg(42, "PLATINUM"), null);
-        delay(2000);
-        client_2.tell(new GetMsg(42), null);
         delay();
+        client_2.tell(new GetMsg(42), null);
+        delay(10000);
+        
         client_1.tell(new GetMsg(42), null);
         delay();
         System.out.println("END SEQUENTIAL CONSISTENCY TEST");
-        delay(2000);*/
+        delay(10000);
 
         
         /*
@@ -139,7 +143,7 @@ public class Main {
         delay(5000);
          */
 
-        
+        /*
         // NODE LEAVE
         List<ActorRef> forClient = new ArrayList<>(nodeList);
         forClient.remove(nodeList.get(1)); // remove the node that is leaving
@@ -151,9 +155,10 @@ public class Main {
         nodeList.get(1).tell(new LeaveMsg(), null);
         delay(2000);
 
-        System.out.println("Client 1 attempts update on key 9 after node 20 leaves (should fail)");
+        System.out.println("Client 1 attempts update on key 9 after node 20 leaves (should work)");
         client_1.tell(new UpdateMsg(9, "BRONZE"), null);
         delay(5000);
+        */
 
         /*
         // QUORUM FAILURE TEST
