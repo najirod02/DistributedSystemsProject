@@ -5,6 +5,7 @@ import akka.actor.ActorRef;
 import akka.actor.Props;
 import mars.Node.GetResponse;
 import mars.Node.UpdateResponse;
+import mars.Node.PeersMsg;
 
 import java.io.Serializable;
 import java.util.ArrayList;
@@ -139,7 +140,7 @@ public class Client extends AbstractActor{
     }
 
     private void onTimeoutMsg(TimeoutMsg msg){
-        if(waitingForResponse){
+        if(waitingForResponse){ 
             waitingForResponse = false;
             logger.log(this.name, "Timeout expired waiting for response, giving up...");
         }

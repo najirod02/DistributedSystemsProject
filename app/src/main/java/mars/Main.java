@@ -9,13 +9,15 @@ import mars.Node.CrashMsg;
 import mars.Node.RecoveryMsg;
 
 import mars.Node.LogStorage;
-
+import mars.Node.PeersMsg;
 import mars.Client.UpdateMsg;
+import mars.Client.UpdateNodeListMsg;
 import mars.Client.GetMsg;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+
 
 public class Main {
     
@@ -73,14 +75,15 @@ public class Main {
         ActorRef client_2 = system.actorOf(Client.props("C2", logger, nodeList), "C2");
         
 
+        /* 
         // BASIC CONCURRENT UPDATE TEST
         logger.log("MAIN", "BASIC CONCURRENT UPDATE TEST");
         System.out.println("START BASIC CONCURRENT UPDATE TEST");
         client_1.tell(new UpdateMsg(42, "GOLD"), null);
-        delay();
+        delay(2000);
         client_2.tell(new UpdateMsg(42, "SILVER"), null);
-        delay(1000);
-
+        delay(5000);
+        */
         /*
         // SEQUENTIAL CONSISTENCY TEST
         logger.log("MAIN", "SEQUENTIAL CONSISTENCY TEST");
@@ -103,6 +106,7 @@ public class Main {
         delay(2000);*/
 
         
+        /*
         // CRASH & RECOVERY
         logger.log("MAIN", "CRASH & RECOVERY");
         System.out.println("Crashing node 20");
@@ -133,17 +137,25 @@ public class Main {
         System.out.println("Client 2 attempts get on key 15 (should succeed)");
         client_2.tell(new GetMsg(15), null);
         delay(5000);
+         */
 
-        /** 
+        
         // NODE LEAVE
+        List<ActorRef> forClient = new ArrayList<>(nodeList);
+        forClient.remove(nodeList.get(1)); // remove the node that is leaving
+
         logger.log("MAIN", "NODE LEAVE");
         System.out.println("Node 20 leaving the network");
+        client_1.tell(new UpdateNodeListMsg(forClient), null);
+        
         nodeList.get(1).tell(new LeaveMsg(), null);
-        delay();
+        delay(2000);
+
         System.out.println("Client 1 attempts update on key 9 after node 20 leaves (should fail)");
         client_1.tell(new UpdateMsg(9, "BRONZE"), null);
-        delay(1000);
+        delay(5000);
 
+        /*
         // QUORUM FAILURE TEST
         logger.log("MAIN", "QUORUM FAILURE TEST");
         System.out.println("=== START QUORUM FAILURE TEST ===");

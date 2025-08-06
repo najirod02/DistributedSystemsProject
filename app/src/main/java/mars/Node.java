@@ -38,7 +38,7 @@ public class Node extends AbstractActor{
 
     private static Random random = new Random();
 
-    private enum State {
+    public enum State {
         JOIN,
         LEAVE,
         STABLE,
@@ -839,7 +839,10 @@ public class Node extends AbstractActor{
             }
             //Because of FIFO and reliable channels, it cannot happen that proposedVersions.get(msg.key).version < msg.value.version
             //Neither that proposedVersions.get(msg.key) == null
-            if(proposedVersions.get(msg.key).version < msg.value.version) {
+            if(proposedVersions.get(msg.key) == null) {
+                throw new IllegalStateException("Proposed version is null, this should not happen due to FIFO and reliable channels guarantees.");    
+            }
+            else if(proposedVersions.get(msg.key).version < msg.value.version) {
                 throw new IllegalStateException("Proposed version is less than the stored version. This should not happen due to FIFO and reliable channels guarantees.");
             }
             else if(proposedVersions.get(msg.key).version == msg.value.version) {
