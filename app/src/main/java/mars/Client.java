@@ -16,7 +16,7 @@ import java.util.concurrent.TimeUnit;
 import scala.concurrent.duration.Duration;
 
 public class Client extends AbstractActor{
-    private static final long TIMEOUT = 20000;//in millis, should be large enough to 
+    private static final long TIMEOUT = 10000;//in millis, should be large enough to 
                                              //allow coordinator to respond even with maximum delay
     private static Random rand = new Random();
 

@@ -72,6 +72,7 @@ public class Main {
         ActorRef client_1 = system.actorOf(Client.props("C1", logger, nodeList), "C1");
         ActorRef client_2 = system.actorOf(Client.props("C2", logger, nodeList), "C2");
         
+
         // BASIC CONCURRENT UPDATE TEST
         logger.log("MAIN", "BASIC CONCURRENT UPDATE TEST");
         System.out.println("START BASIC CONCURRENT UPDATE TEST");
@@ -80,7 +81,7 @@ public class Main {
         client_2.tell(new UpdateMsg(42, "SILVER"), null);
         delay(1000);
 
-
+        /*
         // SEQUENTIAL CONSISTENCY TEST
         logger.log("MAIN", "SEQUENTIAL CONSISTENCY TEST");
         System.out.println("START SEQUENTIAL CONSISTENCY TEST");
@@ -99,30 +100,41 @@ public class Main {
         client_1.tell(new GetMsg(42), null);
         delay();
         System.out.println("END SEQUENTIAL CONSISTENCY TEST");
-        delay(1000);
+        delay(2000);*/
 
-        /**
+        
         // CRASH & RECOVERY
         logger.log("MAIN", "CRASH & RECOVERY");
         System.out.println("Crashing node 20");
         nodeList.get(1).tell(new CrashMsg(), null);
-        delay();
-        System.out.println("Client 1 attempts update on key 10 (should fail)");
-        client_1.tell(new UpdateMsg(10, "SILVER"), null);
-        delay();
-        System.out.println("Client 2 attempts get on key 10 (should fail)");
-        client_2.tell(new GetMsg(10), null);
-        delay();
+        delay(2000);
+
+        System.out.println("Crashing node 30");
+        nodeList.get(2).tell(new CrashMsg(), null);
+        delay(2000);
+        
+        System.out.println("Client 1 attempts update on key 15 (should fail)");
+        client_1.tell(new UpdateMsg(15, "SILVER"), null);
+        delay(2000);
+        System.out.println("Client 2 attempts get on key 15 (should fail)");
+        client_2.tell(new GetMsg(15), null);
+        delay(2000);
+
         System.out.println("Recovering node 20");
         nodeList.get(1).tell(new RecoveryMsg(bootstrap), null);
-        delay();
-        System.out.println("Client 1 attempts update on key 10 (should succeed)");
-        client_1.tell(new UpdateMsg(10, "PLATINUM"), null);
-        delay();
-        System.out.println("Client 2 attempts get on key 10 (should succeed)");
-        client_2.tell(new GetMsg(10), null);
-        delay(1000);
+        delay(2000);
+        System.out.println("Recovering node 30");
+        nodeList.get(2).tell(new RecoveryMsg(bootstrap), null);
+        delay(10000);
 
+        System.out.println("Client 1 attempts update on key 15 (should succeed)");
+        client_1.tell(new UpdateMsg(15, "PLATINUM"), null);
+        delay();
+        System.out.println("Client 2 attempts get on key 15 (should succeed)");
+        client_2.tell(new GetMsg(15), null);
+        delay(5000);
+
+        /** 
         // NODE LEAVE
         logger.log("MAIN", "NODE LEAVE");
         System.out.println("Node 20 leaving the network");
