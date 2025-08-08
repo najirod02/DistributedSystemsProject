@@ -18,7 +18,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Random;
 
-//TODO: Swap the order of tell and delay
 /**
  * NOTE: a node stores a key only if the key is strictly less than the node itself
  * 
@@ -300,6 +299,7 @@ public class Node extends AbstractActor{
      * the node can actually store it based on the key value
      * @param incomingStorage the storage it needs to be merged
      */
+    //TODO: Check if responsible for the key
     public void mergeStorage(Map<Integer, VersionedValue> incomingStorage) {
         for (Map.Entry<Integer, VersionedValue> entry : incomingStorage.entrySet()) {
             Integer key = entry.getKey();
@@ -493,6 +493,10 @@ public class Node extends AbstractActor{
             node.tell(new PeersMsg(newPeerList, payload, State.LEAVE), getSelf());
         }
 
+        if(!proposedVersions.isEmpty()){
+            throw new IllegalStateException("Node " + this.name + " is LEAVING but has pending proposed versions. Assumptions violated.");    
+        }
+
         //update local peer list too not only of the other nodes
         this.peerList.clear();
         this.storage.clear();
@@ -506,6 +510,11 @@ public class Node extends AbstractActor{
     private void onCrashMsg(CrashMsg msg){
         this.state = State.CRASH;
         getContext().become(crashed());
+
+        if(!proposedVersions.isEmpty()){
+            throw new IllegalStateException("Node " + this.name + " is CRASHING but has pending proposed versions. Assumptions violated.");
+        }
+
         logger.log(this.name.toString() + " " + this.state, "Node crashed");
     }
 
@@ -838,14 +847,10 @@ public class Node extends AbstractActor{
                 this.storage.put(msg.key, new VersionedValue(msg.value.value, ++stored_version)); 
             }
             //Because of FIFO and reliable channels, it cannot happen that proposedVersions.get(msg.key).version < msg.value.version
-            //Neither that proposedVersions.get(msg.key) == null
-            if(proposedVersions.get(msg.key) == null) {
-                throw new IllegalStateException("Proposed version is null, this should not happen due to FIFO and reliable channels guarantees.");    
-            }
-            else if(proposedVersions.get(msg.key).version < msg.value.version) {
+            if(proposedVersions.get(msg.key) != null && proposedVersions.get(msg.key).version < msg.value.version) {
                 throw new IllegalStateException("Proposed version is less than the stored version. This should not happen due to FIFO and reliable channels guarantees.");
             }
-            else if(proposedVersions.get(msg.key).version == msg.value.version) {
+            else if(proposedVersions.get(msg.key) != null && proposedVersions.get(msg.key).version == msg.value.version) {
                 proposedVersions.remove(msg.key);
             }
         }
