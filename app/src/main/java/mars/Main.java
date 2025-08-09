@@ -55,6 +55,8 @@ public class Main {
         //maybe leave uncommented the tests you want
         //even better, wait for user input before starting new test
 
+        //NOTE: The bootstrap node is always up and running
+
         System.out.println("Creating 40 - bootstrap");
         bootstrap.tell(new Node.JoinMsg(null), null);
         nodeList.add(bootstrap);

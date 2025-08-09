@@ -15,6 +15,7 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
 
@@ -299,14 +300,14 @@ public class Node extends AbstractActor{
      * the node can actually store it based on the key value
      * @param incomingStorage the storage it needs to be merged
      */
-    //TODO: Check if responsible for the key
     public void mergeStorage(Map<Integer, VersionedValue> incomingStorage) {
         for (Map.Entry<Integer, VersionedValue> entry : incomingStorage.entrySet()) {
             Integer key = entry.getKey();
             VersionedValue incomingValue = entry.getValue();
 
-            //only accept keys less than this node's name
-            if (key >= this.name) continue;
+            //only accept keys that the replica is responsible for
+            ArrayList<ActorRef> sortedPeers = setToList(this.peerList);
+            if (!isResponsible(key, sortedPeers)) continue;
 
             VersionedValue currentValue = this.storage.get(key);
             
@@ -323,39 +324,14 @@ public class Node extends AbstractActor{
      */
     private void cleanupStorageAfterNewNodeJoin(ActorRef newNode) {
         int newNodeName = Integer.parseInt(newNode.path().name());
-        ArrayList<ActorRef> sortedNodes = new ArrayList<>(this.peerList);
+        ArrayList<ActorRef> sortedPeers = setToList(this.peerList);
 
-        Set<Integer> keysToRemove = new TreeSet<>();
-        
-        // TODO: use isResponsible method to check if the node is responsible for the key instead of manually checking?
         for (Integer key : this.storage.keySet()) {
-            //determine the first node responsible for this key
-            //find the first node with name >= key (wrap if necessary)
-            int startIndex = 0;
-            for (int i = 0; i < sortedNodes.size(); i++) {
-                int nodeName = Integer.parseInt(sortedNodes.get(i).path().name());
-                if (nodeName >= key) {
-                    startIndex = i;
-                    break;
-                }
-            }
-
-            //collect the N responsible nodes for the key
-            List<ActorRef> responsibleNodes = new ArrayList<>();
-            for (int i = 0; i < N; i++) {
-                responsibleNodes.add(sortedNodes.get((startIndex + i) % sortedNodes.size()));
-            }
-
             //if this node is not among the responsible replicas, mark key for removal
-            if (!responsibleNodes.contains(getSelf())) {
-                keysToRemove.add(key);
+            if (!isResponsible(key, sortedPeers)) {
+                this.storage.remove(key);
+                logger.log(this.name.toString() + " " + this.state, "Removed key " + key + " (no longer responsible after node " + newNodeName + " joined)");
             }
-        }
-
-        //remove the keys this node should no longer hold
-        for (Integer key : keysToRemove) {
-            this.storage.remove(key);
-            logger.log(this.name.toString() + " " + this.state, "Removed key " + key + " (no longer responsible after node " + newNodeName + " joined)");
         }
     }
 
@@ -378,7 +354,7 @@ public class Node extends AbstractActor{
             getContext().become(createReceive());
 
         state = State.STABLE;
-        waitingForResponses = false;//to ignore the timeout
+        waitingForResponses = false;
         item_repartition_responses = 0;
         logger.log(this.name.toString() + " " + state, "Now STABLE in the network with " + this.peerList.size() + " nodes");
     }
@@ -439,6 +415,7 @@ public class Node extends AbstractActor{
      * and finally, update everyone of the new peer list
      * @param msg the message containing the bootstrap node
      */
+    //TODO: New implementation
     private void onJoinMsg(JoinMsg msg){
         logger.log(this.name.toString() + " " + this.state, "Joining the network");
         //msg will contain the bootstrap node to ask for the peer list
@@ -462,6 +439,7 @@ public class Node extends AbstractActor{
      * for them
      * @param msg
      */
+    //TODO: New implementation
     private void onLeaveMsg(LeaveMsg msg){
         //use the peer list to announce everyone of the departing
         this.state = State.LEAVE;
@@ -644,7 +622,7 @@ public class Node extends AbstractActor{
             ArrayList<ActorRef> peers = setToList(this.peerList);
             int selfIndex = peers.indexOf(getSelf());
             waitingForResponses = true;
-            for (int i = 1; i <= N; ++i) {
+            for (int i = -N+1; i < N; ++i) {
                 int idx = (selfIndex + i) % peers.size();
                 logger.log(this.name + " " + this.state, "Requesting storage from " + peers.get(idx).path().name());
                 delay();
@@ -661,6 +639,7 @@ public class Node extends AbstractActor{
             );
             return;
         }
+        // TODO
         if(this.state != State.JOIN) {
             throw new IllegalStateException("Node " + this.name + " is not in STABLE nor RECOVERY nor JOIN state, cannot process PeersMsg. Assumptions violated.");
         }
