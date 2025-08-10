@@ -27,6 +27,7 @@ dependencies {
     implementation "com.typesafe.akka:akka-actor-typed_${versions.ScalaBinary}:${versions.AkkaVersion}"
 
     testImplementation "com.typesafe.akka:akka-actor-testkit-typed_${versions.ScalaBinary}:${versions.AkkaVersion}"
+    //implementation "com.typesafe.akka:akka-testkit_${versions.ScalaBinary}:${versions.AkkaVersion}"
     implementation "ch.qos.logback:logback-classic:${versions.LogBackVersion}"
 
     // Use JUnit Jupiter for testing.

@@ -18,6 +18,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Random;
 
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+
 // FIXME: Find a better way to handle the throws
 // FIXME: Debug UPDATE
 
@@ -57,6 +61,8 @@ public class Node extends AbstractActor{
         UPDATE_CONFIRM,//used to confirm the update to the replicas
         UPDATE_REJECT,//used to reject the update to the replicas
     }
+
+    private static final String LOGGER_FILE_BASE_PATH = System.getProperty("user.dir") + "/logs";
 
     private Integer name;
     private Logger logger;
@@ -372,6 +378,15 @@ public class Node extends AbstractActor{
                     node.tell(new PeersMsg(this.peerSet, State.JOIN), getSelf());
                 }
             }
+            // Create file in logs
+            try {
+                File f = new File(LOGGER_FILE_BASE_PATH + "/" + this.name.toString());
+                f.createNewFile();
+            }
+            catch (IOException e) {
+                System.out.println("An error occurred.");
+                e.printStackTrace();
+            }
         }
 
         // Context changed in both JOIN and RECOVERY
@@ -393,6 +408,16 @@ public class Node extends AbstractActor{
         if(success) {
             this.state = State.OUT;
             getContext().become(out());
+
+            //Remove file from logs
+            try {
+                File f = new File(LOGGER_FILE_BASE_PATH + "/" + this.name.toString());
+                Files.deleteIfExists(f.toPath());
+            }
+            catch (IOException e) {
+                System.out.println("An error occurred.");
+                e.printStackTrace();
+            }
         }
         else {
             this.state = State.STABLE;
@@ -509,6 +534,10 @@ public class Node extends AbstractActor{
         if(this.state != State.STABLE) {
             throw new IllegalStateException("Node " + this.name + " is not in STABLE state, cannot process LEAVE request. Assumptions violated.");
         }
+        if(this.peerSet.size() <= N) {
+            return;
+        }
+
         this.state = State.LEAVE;
         Set<ActorRef> newPeerList = new TreeSet<>(this.peerSet);
         newPeerList.remove(getSelf());
