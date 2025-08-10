@@ -65,11 +65,11 @@ public class Main {
         System.out.println("Join 20 - 30 - 10");
         nodeList.add(system.actorOf(Node.props(20, logger), "20"));
         nodeList.get(1).tell(new JoinMsg(bootstrap), null);
-        delay(1000);
+        delay(2000);
 
         nodeList.add(system.actorOf(Node.props(30, logger), "30"));
         nodeList.get(2).tell(new JoinMsg(bootstrap), null);
-        delay(1000);
+        delay(2000);
 
         nodeList.add(system.actorOf(Node.props(10, logger), "10"));
         nodeList.get(3).tell(new JoinMsg(bootstrap), null);
@@ -220,18 +220,21 @@ public class Main {
         nodeList.get(1).tell(new CrashMsg(), null);
         delay();
         nodeList.get(2).tell(new CrashMsg(), null);
-        delay();
+        delay(2000);
+        
         System.out.println("Client 1 attempts update with no quorum (should fail)");
         client_1.tell(new UpdateMsg(88, "TUNGSTEN"), null);
         delay();
         System.out.println("Client 2 attempts get with no quorum (should fail)");
         client_2.tell(new GetMsg(88), null);
-        delay();
+        delay(2000);
+        
         System.out.println("Recovering node 20 and 30");
         nodeList.get(1).tell(new RecoveryMsg(bootstrap), null);
         delay();
         nodeList.get(2).tell(new RecoveryMsg(bootstrap), null);
-        delay();
+        delay(2000);
+
         System.out.println("Client 1 retries update after recovery (should succeed)");
         client_1.tell(new UpdateMsg(88, "URANIUM"), null);
         delay();
@@ -251,17 +254,17 @@ public class Main {
         System.out.println("Crashing node 20 and 30");
         nodeList.get(1).tell(new CrashMsg(), null);
         nodeList.get(2).tell(new CrashMsg(), null);
-        delay(500);
+        delay(2000);
 
         System.out.println("Client 1 attempts update with no quorum (simulate timeout)");
         client_1.tell(new UpdateMsg(500, "RHODIUM"), null);
 
         // Wait longer to simulate timeout (client waits but quorum can't form)
-        //delay(2000);
+        delay(2000);
 
         System.out.println("Client 2 attempts get after expected timeout");
         client_2.tell(new GetMsg(500), null);
-        delay();
+        delay(2000);
 
         System.out.println("=== END QUORUM TIMEOUT TEST ===");
         delay(1000);

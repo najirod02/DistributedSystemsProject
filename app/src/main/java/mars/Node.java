@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Random;
 
 // FIXME: Find a better way to handle the throws
+// FIXME: Debug UPDATE
 
 /**
  * NOTE: a node stores a key only if the key is strictly less than the node itself
@@ -71,7 +72,6 @@ public class Node extends AbstractActor{
 
     private Set<ActorRef> peerSet;//contains also yourself
 
-    private boolean waitingForResponses = false;//in order to "ignore" the timeout
     private int item_repartition_responses = 0;
     // to track which neighbour is available during JOIN
     private final boolean[] available_neighbours = new boolean[2*N - 1]; 
@@ -252,7 +252,8 @@ public class Node extends AbstractActor{
         this.peerSet.add(getSelf());//add yourself to list
         
         this.storage = new HashMap<>();
-        this.state = State.JOIN;
+        this.state = State.OUT;
+        getContext().become(out());
     }
 
     static public Props props(Integer name, Logger logger) {
@@ -267,6 +268,10 @@ public class Node extends AbstractActor{
      */
     private ArrayList<ActorRef> setToList(Set<ActorRef> set){
         return new ArrayList<>(set);
+    }
+
+    private static int modulo(int a, int b) {
+        return (a % b + b) % b; // to handle negative values correctly
     }
 
     /**
@@ -298,7 +303,7 @@ public class Node extends AbstractActor{
         if(sortedPeers.size() == 0) return result;
 
         for (int i = 0; i < N; ++i) {
-            int idx = (startIndex + i) % sortedPeers.size();
+            int idx = modulo((startIndex + i), sortedPeers.size());
             result.add(sortedPeers.get(idx));
         }
         return result;
@@ -370,10 +375,8 @@ public class Node extends AbstractActor{
         }
 
         // Context changed in both JOIN and RECOVERY
+        this.state = State.STABLE;
         getContext().become(createReceive());
-
-        state = State.STABLE;
-        waitingForResponses = false;
         logger.log(this.name.toString() + " " + state, "Now STABLE in the network with " + this.peerSet.size() + " nodes");
     }
 
@@ -435,14 +438,14 @@ public class Node extends AbstractActor{
         int selfIdx = sortedPeers.indexOf(getSelf());
         int neighIdx = sortedPeers.indexOf(neighbour);
         // Index in sortedPeers of the first neighbour in available_neighbours
-        int startIndex = (selfIdx - N + 1) % sortedPeers.size();
-        int idx = (neighIdx - startIndex) % sortedPeers.size();
+        int startIndex = modulo((selfIdx - N + 1), sortedPeers.size());
+        int idx = modulo((neighIdx - startIndex), sortedPeers.size());
         
-        if(idx < 0 || neighIdx == selfIdx || idx > 2*N - 1) {
+        if(neighIdx == selfIdx || idx > 2*N - 1) {
             idx = -1;
         }
         else {
-            if (neighIdx > selfIdx) idx--;
+            if (idx > N - 1) idx--; // N-1 should be the place of self, so shift by 1
         }
 
         return idx;
@@ -489,6 +492,7 @@ public class Node extends AbstractActor{
         }
         else {
             this.state = State.STABLE;
+            getContext().become(createReceive());
             logger.log(this.name.toString() + " " + state, "Now STABLE in the network with " + this.peerSet.size() + " nodes");
         }
     }
@@ -673,7 +677,14 @@ public class Node extends AbstractActor{
 
         this.peerSet.clear();
         this.peerSet.addAll(msg.peerSet);
+        this.peerSet.add(getSelf());//add yourself to the list
         logger.log(this.name.toString() + " " + this.state, "Updated peer list with " + this.peerSet.size() + " nodes");
+
+        //For the first joins
+        if(this.state == State.JOIN && this.peerSet.size() <= N) {
+            proceedJoinRecovery();
+            return;
+        }
 
         //handle RECOVERY
         if (this.state == State.RECOVERY){
@@ -694,11 +705,10 @@ public class Node extends AbstractActor{
         //send ItemsRequestMsg to peers you want data from
         ArrayList<ActorRef> sortedPeers = setToList(this.peerSet);
         int selfIndex = sortedPeers.indexOf(getSelf());
-        waitingForResponses = true;
         item_repartition_responses = 0;
         for (int i = -N+1; i < N; ++i) {
             if (i == 0) continue; // skip self
-            int idx = (selfIndex + i) % sortedPeers.size();
+            int idx = modulo((selfIndex + i), sortedPeers.size());
             logger.log(this.name + " " + this.state, "Requesting storage to " + sortedPeers.get(idx).path().name());
             delay();
             sortedPeers.get(idx).tell(new ItemsRequestMsg(), getSelf());
@@ -731,11 +741,16 @@ public class Node extends AbstractActor{
         item_repartition_responses++;
 
         if(this.state == State.JOIN) {
-            int idx = getNeighbourIdx(getSender());
+            int idx = getNeighbourIdx(getSender()); 
             if(idx < 0) {
                 throw new IllegalStateException("Node " + this.name + " received ItemRepartitioningMsg from " + getSender().path().name() + " but the index is negative.");
             }
-            available_neighbours[idx] = true;
+            // If 2*N - 1 > this.peerSet.size() - 1, then one node 
+            // will appear twice in available_neighbours
+            while(idx < 2*N - 1) {   
+                available_neighbours[idx] = true;
+                idx += this.peerSet.size() - 1;
+            }
         }
 
         mergeStorage(msg.storage);
@@ -922,7 +937,12 @@ public class Node extends AbstractActor{
         if(idx < 0) {
             throw new IllegalStateException("Node " + this.name + " received LeaveAck from " + getSender().path().name() + ".");
         }
-        available_neighbours[idx] = true;
+        // If 2*N - 1 > this.peerSet.size() - 1, then one node 
+        // will appear twice in available_neighbours
+        while(idx < 2*N -1) {
+                available_neighbours[idx] = true;
+                idx += this.peerSet.size() - 1;
+        }
 
         if(++item_repartition_responses == 2*N - 1) {
             //all responses received, proceed with the next steps
