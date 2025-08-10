@@ -18,6 +18,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Random;
 
+// FIXME: Find a better way to handle the throws
+
 /**
  * NOTE: a node stores a key only if the key is strictly less than the node itself
  * 
@@ -65,6 +67,7 @@ public class Node extends AbstractActor{
     // key -> version
     //Note that, because of the assumptions, the replica will always Leave/Crash with porposedVersions empty.
     private final Map<Integer, ProposedVersion> proposedVersions = new HashMap<>();
+    private final Map<Integer, VersionedValue> proposedValues = new HashMap<>();    // Used during Leave procedure
 
     private Set<ActorRef> peerSet;//contains also yourself
 
@@ -72,6 +75,7 @@ public class Node extends AbstractActor{
     private int item_repartition_responses = 0;
     // to track which neighbour is available during JOIN
     private final boolean[] available_neighbours = new boolean[2*N - 1]; 
+    private final boolean[] ignore_nuple = new boolean[N];
 
     // private class to store both value and version inside the storage
     private class VersionedValue{
@@ -160,11 +164,9 @@ public class Node extends AbstractActor{
 
     public static class PeersMsg implements Serializable {
         public final Set<ActorRef> peerSet;//the set of the nodes in the network
-        public final Map<Integer, VersionedValue> dataToStore;//in case of leaving, share the data to store
         public final State senderState;//useful to understand if the sender is a joining or a leaving node
-        public PeersMsg(Set<ActorRef> peerSet, Map<Integer, VersionedValue> dataToStore, State senderState){
+        public PeersMsg(Set<ActorRef> peerSet, State senderState){
             this.peerSet = peerSet;
-            this.dataToStore = dataToStore != null ? dataToStore : new HashMap<>();
             this.senderState = senderState;
         }
     }
@@ -191,6 +193,24 @@ public class Node extends AbstractActor{
         }
     }
 
+    public static class LeaveAnnouncement implements Serializable {
+        public final Map<Integer, VersionedValue> dataToStore;//in case of leaving, share the data to store
+
+        public LeaveAnnouncement(Map<Integer, VersionedValue> dataToStore) {
+            this.dataToStore = dataToStore;
+        }
+    }
+
+    public static class LeaveAck implements Serializable {}
+    
+    public static class LeaveOutcomeMsg implements Serializable {
+        boolean commit;
+
+        public LeaveOutcomeMsg (boolean commit) {
+            this.commit = commit;
+        }
+    }
+
     // --- OTHER MESSAGES -------------------------------
     public static class LogStorage implements Serializable {}
 
@@ -206,6 +226,8 @@ public class Node extends AbstractActor{
             this.requestId = requestId;
         }
     }
+
+    public static class LeaveTimeoutMsg implements Serializable {}
 
     // CONSTRUCTOR -----------------------------------------
     public Node(Integer name, Logger logger){
@@ -337,16 +359,12 @@ public class Node extends AbstractActor{
         }
     }
 
-    /**
-     * execute a specific action based on the node state after a certain amount of
-     * responses are received or the timeout has been triggered
-     */
-    private void proceedAfterResponses() {
+    private void proceedJoinRecovery() {
         if (state == State.JOIN) {
             for (ActorRef node : this.peerSet) {
                 if (node != getSelf()) {
                     delay();
-                    node.tell(new PeersMsg(this.peerSet, null, State.JOIN), getSelf());
+                    node.tell(new PeersMsg(this.peerSet, State.JOIN), getSelf());
                 }
             }
         }
@@ -357,6 +375,25 @@ public class Node extends AbstractActor{
         state = State.STABLE;
         waitingForResponses = false;
         logger.log(this.name.toString() + " " + state, "Now STABLE in the network with " + this.peerSet.size() + " nodes");
+    }
+
+    private void proceedLeave(boolean success) {
+        // Tell to everyone the choice and change state
+        ArrayList<ActorRef> newPeers = new ArrayList<>(this.peerSet);
+        newPeers.remove(getSelf());
+
+        for(ActorRef peer: newPeers) {
+            delay();
+            peer.tell(new LeaveOutcomeMsg(success), getSelf());
+        }
+
+        if(success) {
+            this.state = State.OUT;
+            getContext().become(out());
+        }
+        else {
+            this.state = State.STABLE;
+        }
     }
 
     private void sendGetToReplicas(UUID requestId, Integer key, List<ActorRef> replicas) {
@@ -393,6 +430,24 @@ public class Node extends AbstractActor{
         );
     }
 
+    private int getNeighbourIdx(ActorRef neighbour) {
+        ArrayList<ActorRef> sortedPeers = new ArrayList<>(this.peerSet);
+        int selfIdx = sortedPeers.indexOf(getSelf());
+        int neighIdx = sortedPeers.indexOf(neighbour);
+        // Index in sortedPeers of the first neighbour in available_neighbours
+        int startIndex = (selfIdx - N + 1) % sortedPeers.size();
+        int idx = (neighIdx - startIndex) % sortedPeers.size();
+        
+        if(idx < 0 || neighIdx == selfIdx || idx > 2*N - 1) {
+            idx = -1;
+        }
+        else {
+            if (neighIdx > selfIdx) idx--;
+        }
+
+        return idx;
+    }
+
     /**
      * during unicast transmissions, add some delay
      * to simulate the network
@@ -415,7 +470,6 @@ public class Node extends AbstractActor{
      * and finally, update everyone of the new peer list
      * @param msg the message containing the bootstrap node
      */
-    //TODO: New implementation
     // Check that, for each n-uple that may contain a key
     // for which the node is responsible, R replicas are up. 
     // To do so, use the GET method to query the ID of the node 
@@ -446,8 +500,6 @@ public class Node extends AbstractActor{
      * for them
      * @param msg
      */
-    //TODO: New implementation
-    //TODO: Remember to change context to out and state to OUT
     private void onLeaveMsg(LeaveMsg msg){
         //use the peer list to announce everyone of the departing
         if(this.state != State.STABLE) {
@@ -462,6 +514,10 @@ public class Node extends AbstractActor{
         Map<ActorRef, Map<Integer, VersionedValue>> nodeToDataMap = new HashMap<>();
         List<ActorRef> sortedPeers = setToList(newPeerList);
 
+        for(int i=0; i<N; i++) {
+            ignore_nuple[i] = true;
+        }
+
         for (Map.Entry<Integer, VersionedValue> entry : this.storage.entrySet()) {
             int key = entry.getKey();
             VersionedValue item = entry.getValue();
@@ -472,6 +528,21 @@ public class Node extends AbstractActor{
             for (ActorRef target : targets) {
                 nodeToDataMap.computeIfAbsent(target, k -> new HashMap<>()).put(key, item);
             }
+            
+            // Should not ignore this N-uple as the leaving node contians a key that will be stored
+            // there after the leave
+            int nuple = getNeighbourIdx(sortedPeers.get(idx));
+            if(nuple >= N) {
+                throw new IllegalStateException("Node " + sortedPeers.get(idx).path().name() + " cannot be a neighbour first replica after leave.");
+            }
+            ignore_nuple[nuple] = false;
+        }
+        
+        // To speedup the process if all neighbours are running
+        item_repartition_responses = 0;
+        // Prepare available_neighbours
+        for(int i=0; i<2*N - 1; i++) {
+            available_neighbours[i] = false;
         }
 
         //send peer list + specific data to each node
@@ -479,17 +550,17 @@ public class Node extends AbstractActor{
             Map<Integer, VersionedValue> payload = nodeToDataMap.getOrDefault(node, new HashMap<>());
             logger.log(this.name.toString()  + " " + this.state, "Tell " + node.path().name() + " to update peer list (+ storage)");
             delay();
-            node.tell(new PeersMsg(newPeerList, payload, State.LEAVE), getSelf());
+            node.tell(new LeaveAnnouncement(payload), getSelf());
         }
 
-        if(!proposedVersions.isEmpty()){
-            throw new IllegalStateException("Node " + this.name + " is LEAVING but has pending proposed versions. Assumptions violated.");    
-        }
-
-        //update local peer list too not only of the other nodes
-        this.peerSet.clear();
-        this.storage.clear();
-        logger.log(this.name.toString()  + " " + this.state, "Left the network and cleared peer list and storage");
+        // Set Leave Timeout
+        getContext().getSystem().scheduler().scheduleOnce(
+            Duration.create(T, TimeUnit.MILLISECONDS),
+            getSelf(),
+            new LeaveTimeoutMsg(),
+            getContext().getSystem().dispatcher(),
+            ActorRef.noSender()
+        );
     }
 
     /**
@@ -542,7 +613,7 @@ public class Node extends AbstractActor{
         List<ActorRef> replicas = getNextN(peers, firstReplicaIndex);
         //replicas.add(peers.get(firstReplicaIndex));
         
-        // DONE: GET before UPDATE
+        //GET before UPDATE
         sendGetToReplicas(requestId, msg.key, replicas);
     }
 
@@ -577,7 +648,7 @@ public class Node extends AbstractActor{
     public void onRequestPeersMsg(RequestPeersMsg msg){
         // the bootstrap simply send back its list of peers
         delay();
-        getSender().tell(new PeersMsg(this.peerSet, null, State.STABLE), getSelf());
+        getSender().tell(new PeersMsg(this.peerSet, State.STABLE), getSelf());
     }
 
     /**
@@ -593,29 +664,6 @@ public class Node extends AbstractActor{
             this.peerSet.addAll(msg.peerSet); // update peer list
             logger.log(this.name.toString() + " " + this.state, "Updated peer list after JOIN, now " + this.peerSet.size() + " nodes");
             cleanupStorageAfterNewNodeJoin(getSender());
-            return;
-        }
-
-        //handle LEAVE announcement from another node
-        if (this.state == State.STABLE && msg.senderState == State.LEAVE) {
-            //replace peer list (sender already removed themselves)
-            this.peerSet.clear();
-            this.peerSet.addAll(msg.peerSet);
-            logger.log(this.name.toString() + " " + this.state, "Updated peer list after LEAVE, now " + this.peerSet.size() + " nodes");
-
-            //store only if version is greater than the one in local storage
-            for (Map.Entry<Integer, VersionedValue> entry : msg.dataToStore.entrySet()) {
-                int key = entry.getKey();
-                VersionedValue incoming = entry.getValue();
-                VersionedValue existing = this.storage.get(key);
-
-                if (existing == null || incoming.version > existing.version) {
-                    this.storage.put(key, incoming);
-                    logger.log(this.name.toString() + " " + this.state, "Stored key " + key + " from LEAVE of " + getSender().path().name() + " with version " + incoming.version);
-                } else {
-                    logger.log(this.name.toString() + " " + this.state, "Ignored key " + key + " from LEAVE (existing version " + existing.version + " >= " + incoming.version + ")");
-                }
-            }
             return;
         }
 
@@ -683,18 +731,10 @@ public class Node extends AbstractActor{
         item_repartition_responses++;
 
         if(this.state == State.JOIN) {
-            ArrayList<ActorRef> sortedPeers = new ArrayList<>(this.peerSet);
-            int joinIdx = sortedPeers.indexOf(getSelf());
-            int neighIdx = sortedPeers.indexOf(getSender());
-            // Index in sortedPeers of the first neighbour in available_neighbours
-            int startIndex = (joinIdx - N + 1) % sortedPeers.size();
-            int idx = (neighIdx - startIndex) % sortedPeers.size();
-            
-            if(idx < 0 || neighIdx == joinIdx) {
+            int idx = getNeighbourIdx(getSender());
+            if(idx < 0) {
                 throw new IllegalStateException("Node " + this.name + " received ItemRepartitioningMsg from " + getSender().path().name() + " but the index is negative.");
             }
-
-            if (neighIdx > joinIdx) idx--;
             available_neighbours[idx] = true;
         }
 
@@ -703,7 +743,7 @@ public class Node extends AbstractActor{
         //if all responses obtained, procede with computation
         //otherwise wait at most the TIMEOUT
         if (item_repartition_responses == 2*N - 1) {
-            proceedAfterResponses();
+            proceedJoinRecovery();
         }
     }
 
@@ -835,11 +875,8 @@ public class Node extends AbstractActor{
             if(stored_version < msg.value.version) {
                 this.storage.put(msg.key, new VersionedValue(msg.value.value, ++stored_version)); 
             }
-            //Because of FIFO and reliable channels, it cannot happen that proposedVersions.get(msg.key).version < msg.value.version
-            if(proposedVersions.get(msg.key) != null && proposedVersions.get(msg.key).version < msg.value.version) {
-                throw new IllegalStateException("Proposed version is less than the stored version. This should not happen due to FIFO and reliable channels guarantees.");
-            }
-            else if(proposedVersions.get(msg.key) != null && proposedVersions.get(msg.key).version == msg.value.version) {
+
+            if(proposedVersions.get(msg.key) != null && proposedVersions.get(msg.key).version == msg.value.version) {
                 proposedVersions.remove(msg.key);
             }
         }
@@ -852,6 +889,61 @@ public class Node extends AbstractActor{
                 proposedVersions.remove(msg.key);
             }
         }
+    }
+
+    private void onLeaveAnnouncement(LeaveAnnouncement msg) {
+        // Check that proposedValues is empty
+        if(!proposedValues.isEmpty()) {
+            throw new IllegalStateException("Concurrent Leave operations. Assumptions violated.");
+        }
+
+        //store only if version is greater than the one in local storage
+        for (Map.Entry<Integer, VersionedValue> entry : msg.dataToStore.entrySet()) {
+            int key = entry.getKey();
+            VersionedValue incoming = entry.getValue();
+            VersionedValue existing = this.storage.get(key);
+
+            if (existing == null || incoming.version > existing.version) {
+                proposedValues.put(key, incoming);
+                logger.log(this.name.toString() + " " + this.state, "Proposed key " + key + " from LEAVE of " + getSender().path().name() + " with version " + incoming.version);
+            } else {
+                logger.log(this.name.toString() + " " + this.state, "Ignored key " + key + " from LEAVE (existing version " + existing.version + " >= " + incoming.version + ")");
+            }
+        }
+
+        if(!msg.dataToStore.isEmpty()) {
+            delay();
+            getSender().tell(new LeaveAck(), getSelf());
+        }
+    }
+
+    private void onLeaveAck(LeaveAck msg) {
+        int idx = getNeighbourIdx(getSender());
+        if(idx < 0) {
+            throw new IllegalStateException("Node " + this.name + " received LeaveAck from " + getSender().path().name() + ".");
+        }
+        available_neighbours[idx] = true;
+
+        if(++item_repartition_responses == 2*N - 1) {
+            //all responses received, proceed with the next steps
+            logger.log(this.name.toString() + " " + this.state, "Received all LEAVE ACKs, proceeding with the next steps");
+            proceedLeave(true);
+        } else {
+            logger.log(this.name.toString() + " " + this.state, "Received LEAVE ACK from " + getSender().path().name() + ", waiting for more responses");
+        }
+    }
+
+    private void onLeaveOutcomeMsg(LeaveOutcomeMsg msg) {
+        // Commit changes if Leave done 
+        if(msg.commit) {
+            for(Integer key: proposedValues.keySet()) {
+                this.storage.put(key, proposedValues.get(key));
+            }
+            this.peerSet.remove(getSender());
+            logger.log(this.name.toString() + " " + this.state, "Updated peer list after LEAVE, now " + this.peerSet.size() + " nodes");
+        }
+
+        proposedValues.clear();
     }
 
     // --- OTHER MESSAGES -------------------------------
@@ -883,7 +975,7 @@ public class Node extends AbstractActor{
      * @param msg
      */
     private void onTimeoutMsg(TimeoutMsg msg) {
-        // TODO: Handle timeout for JOIN and RECOVERY
+        //Handle timeout for JOIN and RECOVERY
         //if the node is in a stable state, it means it requested
         //an update or get from a quorum
         //otherwise it is in a recovery or join state
@@ -910,12 +1002,12 @@ public class Node extends AbstractActor{
                     getContext().become(out());
                 } else {
                     logger.log(this.name.toString() + " " + this.state, "Quorum reached with " + item_repartition_responses + " responses, proceeding with the next steps");
-                    proceedAfterResponses();
+                    proceedJoinRecovery();
                 }
             }
             else {
                 logger.log(this.name.toString() + " " + this.state, "Timeout expired waiting for responses, proceeding with " + item_repartition_responses + " responses");
-                proceedAfterResponses();
+                proceedJoinRecovery();
             }
         }
     }
@@ -962,6 +1054,35 @@ public class Node extends AbstractActor{
         }
     }
 
+    private void onLeaveTimeoutMsg(LeaveTimeoutMsg msg) {
+        if(item_repartition_responses < 2*N - 1) {
+            // Check that for each n-uple t o not ignore W replicas are available
+            int count = 0;
+            int nuple = 0;
+
+            // First N-uple
+            for (int i=0; i<N; i++) {
+                if(available_neighbours[i]) count++;
+            }
+
+            // Next neighbours
+            for(int i=N; i<2*N-1 && (ignore_nuple[nuple] || count >= W); i++) {
+                if(available_neighbours[i-N]) count--;
+                if(available_neighbours[i]) count++;
+                nuple++;
+            }
+
+            // Check if quorum is reached for every N-uple
+            if(!ignore_nuple[nuple] && count < W) {
+                logger.log(this.name.toString() + " " + this.state, "Timeout expired waiting for responses, cancelling JOIN procedure.");
+                proceedLeave(false);
+            } else {
+                logger.log(this.name.toString() + " " + this.state, "Quorum reached with " + item_repartition_responses + " responses, proceeding with the next steps");
+                proceedLeave(true);
+            }
+        }
+    }
+
     //define the mapping between the received message types and actor methods
     @Override
     public Receive createReceive() {
@@ -980,11 +1101,15 @@ public class Node extends AbstractActor{
         .match(ItemsRequestMsg.class, this::onItemsRequestMsg)
         .match(ItemRepartitioningMsg.class, this::onItemRepartitioningMsg)
         .match(QuorumRequestMsg.class, this::onQuorumRequestMsg)
+        .match(LeaveAnnouncement.class, this::onLeaveAnnouncement)
+        .match(LeaveAck.class, this::onLeaveAck)
+        .match(LeaveOutcomeMsg.class, this::onLeaveOutcomeMsg)
         
         //others handlers
         .match(LogStorage.class, this::onLogStorageMsg)
         .match(TimeoutMsg.class, this::onTimeoutMsg)
         .match(QuorumTimeoutMsg.class, this::onQuorumTimeoutMsg)
+        .match(LeaveTimeoutMsg.class, this::onLeaveTimeoutMsg)
 
         .matchAny(msg -> {
             //any other message is ignored
@@ -1020,5 +1145,4 @@ public class Node extends AbstractActor{
             })
             .build();
     }
-
 }
