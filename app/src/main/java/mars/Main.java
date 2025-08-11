@@ -227,8 +227,7 @@ public class Main {
 
         forClients.remove(nodeMap.get(20)); // remove the node that is crashing
         forClients.remove(nodeMap.get(30));
-        clientList.get(0).tell(new UpdateNodeListMsg(forClients), null);
-        clientList.get(1).tell(new UpdateNodeListMsg(forClients), null);
+        updateClients();
         
         nodeMap.get(20).tell(new CrashMsg(), null);
         delay(2000);
@@ -246,8 +245,8 @@ public class Main {
         delay(2000);
 
         forClients.add(nodeMap.get(20)); // add the node that is recovering
-        clientList.get(0).tell(new UpdateNodeListMsg(forClients), null);
-        clientList.get(1).tell(new UpdateNodeListMsg(forClients), null);
+        forClients.add(nodeMap.get(30));
+        updateClients();
 
         System.out.println("Client 1 attempts update on key 15 (should succeed)");
         clientList.get(0).tell(new UpdateMsg(15, "PLATINUM"), null);
@@ -271,7 +270,7 @@ public class Main {
         updateClients();
         
         nodeMap.get(20).tell(new LeaveMsg(), null);
-        delay(2000);
+        delay(5000);
 
         System.out.println("Client 1 attempts update on key 9 after node 20 leaves (should work)");
         clientList.get(0).tell(new UpdateMsg(9, "BRONZE"), null);
@@ -280,7 +279,7 @@ public class Main {
         // Node re-join
         System.out.println("Node 20 joining the network");
         nodeMap.get(20).tell(new JoinMsg(bootstrap), null);
-        delay(2000);
+        delay(5000);
         
         forClients.add(nodeMap.get(20));
         updateClients();
@@ -541,7 +540,6 @@ public class Main {
     }
 
     private static void join() {
-        //FIXME: Fix non unique name bug
         System.out.print("Choose the ID of the node to add to the Network: ");
         int choice;
         try {

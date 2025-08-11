@@ -15,6 +15,7 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Random;
 
@@ -23,7 +24,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 
 // FIXME: Find a better way to handle the throws
-// FIXME: Debug UPDATE
 
 /**
  * NOTE: a node stores a key only if the key is strictly less than the node itself
@@ -370,12 +370,16 @@ public class Node extends AbstractActor{
         int newNodeName = Integer.parseInt(newNode.path().name());
         ArrayList<ActorRef> sortedPeers = setToList(this.peerSet);
 
+        List<Integer> toRemove = new LinkedList<>();
         for (Integer key : this.storage.keySet()) {
             //if this node is not among the responsible replicas, mark key for removal
             if (!isResponsible(key, sortedPeers)) {
-                this.storage.remove(key);
+                toRemove.add(key);
                 logger.log(this.name.toString() + " " + this.state, "Removed key " + key + " (no longer responsible after node " + newNodeName + " joined)");
             }
+        }
+        for(Integer k: toRemove) {
+            this.storage.remove(k);
         }
     }
 
