@@ -5,12 +5,12 @@ import akka.actor.ActorRef;
 import akka.actor.Props;
 import mars.Node.GetResponse;
 import mars.Node.UpdateResponse;
-import mars.Node.PeersMsg;
 
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 import java.util.Random;
 import java.util.concurrent.TimeUnit;
 
@@ -30,9 +30,9 @@ public class Client extends AbstractActor{
     public static class TimeoutMsg implements Serializable {}
 
     public static class UpdateNodeListMsg implements Serializable {
-        public final List<ActorRef> nodeList;
-        public UpdateNodeListMsg(List<ActorRef> nodeList){
-            this.nodeList = Collections.unmodifiableList(new ArrayList<>(nodeList));
+        public final Set<ActorRef> nodeSet;
+        public UpdateNodeListMsg(Set<ActorRef> nodeSet){
+            this.nodeSet = Collections.unmodifiableSet(nodeSet);
         }
     }
 
@@ -53,14 +53,14 @@ public class Client extends AbstractActor{
     }
 
     // CONSTRUCTOR -----------------------------------------
-    public Client(String name, Logger logger, List<ActorRef> nodeList){
+    public Client(String name, Logger logger, Set<ActorRef> nodeSet){
         this.name = name;
         this.logger = logger;
-        this.nodeList = nodeList;
+        this.nodeList = new ArrayList<>(nodeSet);
     }
 
-    static public Props props(String name, Logger logger, List<ActorRef> nodeList) {
-        return Props.create(Client.class, () -> new Client(name, logger, nodeList));
+    static public Props props(String name, Logger logger, Set<ActorRef> nodeSet) {
+        return Props.create(Client.class, () -> new Client(name, logger, nodeSet));
     }
 
     // UTILS -----------------------------------------
@@ -82,7 +82,7 @@ public class Client extends AbstractActor{
      * @param msg contains the list of all the nodes that belong to the network
      */
     public void onUpdateNodeList(UpdateNodeListMsg msg){
-        this.nodeList = msg.nodeList;
+        this.nodeList = new ArrayList<>(msg.nodeSet);
         logger.log(this.name, "Updated node list");
     }
 

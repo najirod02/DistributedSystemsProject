@@ -14,7 +14,6 @@ import mars.Client.UpdateNodeListMsg;
 import mars.Client.GetMsg;
 
 import java.util.Set;
-
 import java.util.HashSet;
 import java.util.Map;
 import java.util.HashMap;
@@ -49,13 +48,13 @@ public class Main {
     private static final ActorSystem system = ActorSystem.create("marsakka");
     private static final Logger logger = new Logger(LOGGER_FILE_BASE_PATH + "/test.txt");
     private static final Map<Integer, ActorRef> nodeMap = new HashMap<>();
+    private static final List<ActorRef> clientList = new LinkedList<>();
+    private static final Set<ActorRef> forClients = new HashSet<>();    // Nodes list to give to the Clients
     private static ActorRef bootstrap;
-    private static ActorRef client_1;
-    private static ActorRef client_2;
 
     public static void main(String[] args) {
         //FIXME: Close all Akka if assumption is violated
-        //FIXME: try to make better tests
+        //TODO: Other tests
         //at the moment it is hard to understand what is going on
         //maybe leave uncommented the tests you want
         //even better, wait for user input before starting new test
@@ -82,14 +81,13 @@ public class Main {
         nodeMap.get(10).tell(new JoinMsg(bootstrap), null);
         delay(2000);
         
-        List<ActorRef> nodeList = new LinkedList<ActorRef>();
 
         for(Integer key: nodeMap.keySet()) {
-            nodeList.add(nodeMap.get(key));
+            forClients.add(nodeMap.get(key));
         }
 
-        client_1 = system.actorOf(Client.props("C1", logger, nodeList), "C1");
-        client_2 = system.actorOf(Client.props("C2", logger, nodeList), "C2");
+        clientList.add(system.actorOf(Client.props("C1", logger, forClients), "C1"));
+        clientList.add(system.actorOf(Client.props("C2", logger, forClients), "C2"));
 
         // Interactive choice for tests
         boolean runTests = true;
@@ -101,11 +99,10 @@ public class Main {
             System.out.println("3. Crash & Recovery Test");
             System.out.println("4. Node Leave Test");
             System.out.println("5. Quorum Failure Test");
-            System.out.println("6. Quorum Timeout Test");
-            System.out.println("7. Additional Edge Tests");
-            System.out.println("8. Interactive Test");
-            System.out.println("9. Exit");
-            System.out.print("Enter your choice (1-9): ");
+            System.out.println("6. Additional Edge Tests");
+            System.out.println("7. Interactive Test");
+            System.out.println("8. Exit");
+            System.out.print("Enter your choice (1-8): ");
             String choice_s;
             int choice = -1;
             try {
@@ -133,15 +130,12 @@ public class Main {
                     quorumFailureTest();
                     break;
                 case 6:
-                    quorumTimeoutTest();
-                    break;
-                case 7:
                     additionalTests();
                     break;
-                case 8:
+                case 7:
                     interactiveTest();
                     // Exit after Interactive Test
-                case 9:
+                case 8:
                     System.out.println("Exiting...");
                     runTests = false;
                     break;
@@ -151,199 +145,215 @@ public class Main {
         }
         scanner.close();
         logger.log("MAIN", "TERMINATE");
-        logger.closeStream();
         system.terminate();
+        logger.closeStream();
     }
 
     // TESTS //
     private static void concurrentUpdateTest() {
         // BASIC CONCURRENT UPDATE TEST
         logger.log("MAIN", "BASIC CONCURRENT UPDATE TEST");
-        System.out.println("START BASIC CONCURRENT UPDATE TEST");
-        client_1.tell(new UpdateMsg(42, "GOLD"), null);
+        System.out.println("== START BASIC CONCURRENT UPDATE TEST ==");
+        
+        clientList.get(0).tell(new UpdateMsg(42, "GOLD"), null);
         delay(2000);
-        client_2.tell(new UpdateMsg(42, "SILVER"), null);
+        clientList.get(1).tell(new UpdateMsg(42, "SILVER"), null);
+        
+        System.out.println("Waiting for operation to complete...");
         delay(10000);
+        System.out.println("== END BASIC CONCURRENT UPDATE TEST ==");
     }
 
     private static void sequentialConsistencyTest() {
         // SEQUENTIAL CONSISTENCY TEST
         logger.log("MAIN", "SEQUENTIAL CONSISTENCY TEST");
-        System.out.println("START SEQUENTIAL CONSISTENCY TEST");
+        System.out.println("== START SEQUENTIAL CONSISTENCY TEST ==");
 
-        client_1.tell(new UpdateMsg(42, "GOLD"), null);
+        clientList.get(0).tell(new UpdateMsg(42, "GOLD"), null);
         delay();
-        client_2.tell(new UpdateMsg(42, "SILVER"), null);
+        clientList.get(1).tell(new UpdateMsg(42, "SILVER"), null);
         delay(10000);
         
-        client_1.tell(new GetMsg(42), null);
+        clientList.get(0).tell(new GetMsg(42), null);
         delay();
-        client_2.tell(new GetMsg(42), null);
+        clientList.get(1).tell(new GetMsg(42), null);
         delay(10000);
         
-        client_1.tell(new UpdateMsg(42, "PLATINUM"), null);
+        clientList.get(0).tell(new UpdateMsg(42, "PLATINUM"), null);
         delay();
-        client_2.tell(new GetMsg(42), null);
+        clientList.get(1).tell(new GetMsg(42), null);
         delay(10000);
         
-        client_1.tell(new GetMsg(42), null);
+        clientList.get(0).tell(new GetMsg(42), null);
         delay();
-        System.out.println("END SEQUENTIAL CONSISTENCY TEST");
+        
+        System.out.println("Waiting for operation to complete...");
         delay(10000);
+        System.out.println("== END SEQUENTIAL CONSISTENCY TEST ==");
     }
 
     private static void crashRecoveryTest() {
         // CRASH & RECOVERY
         logger.log("MAIN", "CRASH & RECOVERY");
-        System.out.println("Crashing node 20");
+        
+        System.out.println("== START CRASH & RECOVERY TEST ==");
+        System.out.println("Crashing nodes 20 and 30");
+
+        forClients.remove(nodeMap.get(20)); // remove the node that is crashing
+        forClients.remove(nodeMap.get(30));
+        clientList.get(0).tell(new UpdateNodeListMsg(forClients), null);
+        clientList.get(1).tell(new UpdateNodeListMsg(forClients), null);
+        
         nodeMap.get(20).tell(new CrashMsg(), null);
+        delay(2000);
+        nodeMap.get(30).tell(new CrashMsg(), null);
         delay(2000);
         
         System.out.println("Client 1 attempts update on key 15 (should fail)");
-        client_1.tell(new UpdateMsg(15, "SILVER"), null);
+        clientList.get(0).tell(new UpdateMsg(15, "SILVER"), null);
         delay(2000);
-
-        System.out.println("Recovering node 20");
+        
+        System.out.println("Recovering nodes 20 and 30");
         nodeMap.get(20).tell(new RecoveryMsg(bootstrap), null);
         delay(2000);
+        nodeMap.get(30).tell(new RecoveryMsg(bootstrap), null);
+        delay(2000);
+
+        forClients.add(nodeMap.get(20)); // add the node that is recovering
+        clientList.get(0).tell(new UpdateNodeListMsg(forClients), null);
+        clientList.get(1).tell(new UpdateNodeListMsg(forClients), null);
 
         System.out.println("Client 1 attempts update on key 15 (should succeed)");
-        client_1.tell(new UpdateMsg(15, "PLATINUM"), null);
-        delay();
+        clientList.get(0).tell(new UpdateMsg(15, "PLATINUM"), null);
+        delay(2000);
         System.out.println("Client 2 attempts get on key 15 (should succeed)");
-        client_2.tell(new GetMsg(15), null);
+        clientList.get(1).tell(new GetMsg(15), null);
+        
+        System.out.println("Waiting for operation to complete...");
         delay(10000);
+        
+        System.out.println("== END CRASH & RECOVERY TEST ==");
     }
 
     private static void nodeLeaveTest() {
         // NODE LEAVE
-        List<ActorRef> forClient = new LinkedList<>();
-        for(Integer key: nodeMap.keySet()) {
-            forClient.add(nodeMap.get(key));
-        }
-        forClient.remove(nodeMap.get(20)); // remove the node that is leaving
-
         logger.log("MAIN", "NODE LEAVE");
+        System.out.println("== START NODE LEAVE TEST ==");
         System.out.println("Node 20 leaving the network");
-        client_1.tell(new UpdateNodeListMsg(forClient), null);
+        
+        forClients.remove(nodeMap.get(20)); // remove the node that is leaving
+        updateClients();
         
         nodeMap.get(20).tell(new LeaveMsg(), null);
         delay(2000);
 
         System.out.println("Client 1 attempts update on key 9 after node 20 leaves (should work)");
-        client_1.tell(new UpdateMsg(9, "BRONZE"), null);
+        clientList.get(0).tell(new UpdateMsg(9, "BRONZE"), null);
+        delay(2000);
+
+        // Node re-join
+        System.out.println("Node 20 joining the network");
+        nodeMap.get(20).tell(new JoinMsg(bootstrap), null);
+        delay(2000);
+        
+        forClients.add(nodeMap.get(20));
+        updateClients();
+
+        System.out.println("Client 1 attempts get on key 9 after node 20 re-joins (should work)");
+        clientList.get(0).tell(new GetMsg(9), null);
+
+        System.out.println("Waiting for operation to complete...");
         delay(10000);
+        System.out.println("== END NODE LEAVE TEST ==");
     }
 
     private static void quorumFailureTest() {
-        // TODO
         // QUORUM FAILURE TEST
         logger.log("MAIN", "QUORUM FAILURE TEST");
         System.out.println("=== START QUORUM FAILURE TEST ===");
+        
+        forClients.remove(nodeMap.get(20));
+        forClients.remove(nodeMap.get(30));
+        updateClients();
+        
         System.out.println("Crashing node 20 and 30");
         nodeMap.get(20).tell(new CrashMsg(), null);
-        delay();
+        delay(2000);
         nodeMap.get(30).tell(new CrashMsg(), null);
         delay(2000);
         
         System.out.println("Client 1 attempts update with no quorum (should fail)");
-        client_1.tell(new UpdateMsg(88, "TUNGSTEN"), null);
-        delay();
+        clientList.get(0).tell(new UpdateMsg(88, "TUNGSTEN"), null);
+        delay(10000);
         System.out.println("Client 2 attempts get with no quorum (should fail)");
-        client_2.tell(new GetMsg(88), null);
-        delay(2000);
+        clientList.get(1).tell(new GetMsg(88), null);
+        delay(10000);
         
         System.out.println("Recovering node 20 and 30");
         nodeMap.get(20).tell(new RecoveryMsg(bootstrap), null);
-        delay();
+        delay(2000);
         nodeMap.get(30).tell(new RecoveryMsg(bootstrap), null);
         delay(2000);
 
+        forClients.add(nodeMap.get(20));
+        forClients.add(nodeMap.get(30));
+        updateClients();
+
         System.out.println("Client 1 retries update after recovery (should succeed)");
-        client_1.tell(new UpdateMsg(88, "URANIUM"), null);
-        delay();
+        clientList.get(0).tell(new UpdateMsg(88, "URANIUM"), null);
+        delay(2000);
         System.out.println("Client 2 retries get after recovery (should see URANIUM)");
-        client_2.tell(new GetMsg(88), null);
+        clientList.get(1).tell(new GetMsg(88), null);
         delay();
         System.out.println("=== END QUORUM FAILURE TEST ===");
         delay(10000);
     }
 
-    private static void quorumTimeoutTest() {
-        // TODO
-        // === QUORUM TIMEOUT TEST ===
-        logger.log("MAIN", "QUORUM TIMEOUT TEST");
-        System.out.println("=== START QUORUM TIMEOUT TEST ===");
-
-        System.out.println("Crashing node 20 and 30");
-        nodeMap.get(20).tell(new CrashMsg(), null);
-        nodeMap.get(30).tell(new CrashMsg(), null);
-        delay(2000);
-
-        System.out.println("Client 1 attempts update with no quorum (simulate timeout)");
-        client_1.tell(new UpdateMsg(500, "RHODIUM"), null);
-
-        // Wait longer to simulate timeout (client waits but quorum can't form)
-        delay(2000);
-
-        System.out.println("Client 2 attempts get after expected timeout");
-        client_2.tell(new GetMsg(500), null);
-        delay(2000);
-
-        System.out.println("=== END QUORUM TIMEOUT TEST ===");
-        delay(1000);
-
-        System.out.println("Print network storage after tests");
-        for (Integer key : nodeMap.keySet()) {
-            nodeMap.get(key).tell(new LogStorage(), null);
-        }
-        delay(10000);
-    }
-
     private static void additionalTests() {
-        // TODO: Separate and do better
+        // TODO: Separate and make better
         // ADDITIONAL EDGE TESTS
+        /*
         logger.log("MAIN", "ADDITIONAL EDGE TESTS");
         System.out.println("Concurrent writes to same key");
-        client_1.tell(new UpdateMsg(55, "ZINC"), null);
-        client_2.tell(new UpdateMsg(55, "COPPER"), null);
+        clientList.get(0).tell(new UpdateMsg(55, "ZINC"), null);
+        clientList.get(1).tell(new UpdateMsg(55, "COPPER"), null);
         delay();
         System.out.println("Reading value after concurrent writes");
-        client_1.tell(new GetMsg(55), null);
+        clientList.get(0).tell(new GetMsg(55), null);
         delay();
 
         System.out.println("Update and multiple gets for stability");
-        client_1.tell(new UpdateMsg(77, "IRON"), null);
+        clientList.get(0).tell(new UpdateMsg(77, "IRON"), null);
         delay();
-        client_2.tell(new GetMsg(77), null);
+        clientList.get(1).tell(new GetMsg(77), null);
         delay();
-        client_2.tell(new GetMsg(77), null);
+        clientList.get(1).tell(new GetMsg(77), null);
         delay();
-        client_2.tell(new GetMsg(77), null);
+        clientList.get(1).tell(new GetMsg(77), null);
         delay();
 
         System.out.println("GET on unknown key (should fail gracefully or return null)");
-        client_1.tell(new GetMsg(9999), null);
+        clientList.get(0).tell(new GetMsg(9999), null);
         delay();
 
         System.out.println("Crash one node, then update");
         nodeMap.get(20).tell(new CrashMsg(), null);
         delay();
-        client_1.tell(new UpdateMsg(123, "ALUMINUM"), null);
+        clientList.get(0).tell(new UpdateMsg(123, "ALUMINUM"), null);
         delay();
         System.out.println("Crash another node, now quorum lost");
         nodeMap.get(30).tell(new CrashMsg(), null);
         delay();
-        client_2.tell(new GetMsg(123), null);
+        clientList.get(1).tell(new GetMsg(123), null);
         delay();
 
         System.out.println("Write, then have a responsible replica leave");
-        client_1.tell(new UpdateMsg(200, "LEAD"), null);
+        clientList.get(0).tell(new UpdateMsg(200, "LEAD"), null);
         delay();
         System.out.println("Node 10 leaves");
         nodeMap.get(10).tell(new LeaveMsg(), null);
         delay();
-        client_2.tell(new GetMsg(200), null);
+        clientList.get(1).tell(new GetMsg(200), null);
         delay();
 
         System.out.println("Simultaneous leave and recovery");
@@ -351,10 +361,11 @@ public class Main {
         delay();
         nodeMap.get(30).tell(new RecoveryMsg(bootstrap), null);
         delay();
-        client_1.tell(new UpdateMsg(300, "NICKEL"), null);
+        clientList.get(0).tell(new UpdateMsg(300, "NICKEL"), null);
         delay();
-        client_2.tell(new GetMsg(300), null);
+        clientList.get(1).tell(new GetMsg(300), null);
         delay(10000);
+        */
     }
 
     private static void interactiveTest() {
@@ -362,7 +373,7 @@ public class Main {
         boolean runTests = true;
         Scanner scanner = new Scanner(System.in);
 
-        System.out.println("START INTERACTIVE TEST");
+        System.out.println("== START INTERACTIVE TEST ==");
 
         while(runTests) {
             printNetwork();
@@ -425,7 +436,7 @@ public class Main {
             }
         }
         scanner.close();   
-        System.out.println("END INTERACTIVE TEST");
+        System.out.println("== END INTERACTIVE TEST ==");
     }
 
     // OPERATIONS //
@@ -450,7 +461,7 @@ public class Main {
             return;
         }
         
-        client_1.tell(new GetMsg(choice), null);
+        clientList.get(0).tell(new GetMsg(choice), null);
         System.out.println("Waiting for operation to complete...");
         delay(10000);
         System.out.println("Get completed. Check the logs.");
@@ -488,7 +499,7 @@ public class Main {
         }
         scanner.close();
         
-        client_1.tell(new UpdateMsg(key, value), null);
+        clientList.get(0).tell(new UpdateMsg(key, value), null);
         System.out.println("Waiting for operation to complete...");
         delay(10000);
         System.out.println("Update completed. Check the logs.");
@@ -530,6 +541,8 @@ public class Main {
         if(f.exists() && !f.isDirectory()) {
             System.out.println("Join operation succeded!");
             nodeMap.put(choice, newPeer);
+            forClients.add(newPeer);
+            updateClients();
         }
         else {
             System.out.println("Join operation failed.");
@@ -577,6 +590,8 @@ public class Main {
         File f = new File(LOGGER_FILE_BASE_PATH + "/" + choice);
         if(!f.exists() || f.isDirectory()) {
             System.out.println("Leave operation succeded!");
+            forClients.remove(nodeMap.get(choice));
+            updateClients();
             nodeMap.remove(choice);
         }
         else {
@@ -617,6 +632,8 @@ public class Main {
             return;
         }
 
+        forClients.remove(nodeMap.get(choice));
+        updateClients();
         nodeMap.get(choice).tell(new CrashMsg(), null);
         System.out.println("Waiting for operation to complete...");
         delay(5000);
@@ -649,12 +666,34 @@ public class Main {
         }
 
         nodeMap.get(choice).tell(new RecoveryMsg(bootstrap), null);
+        forClients.add(nodeMap.get(choice));
+        updateClients();
+
         System.out.println("Waiting for operation to complete...");
         delay(5000);
     }
 
+    private static void addClient() {
+        //TODO
+    }
+
+    private static void dropClient() {
+        //TODO
+    }
+
+
     // UTILS //
     private static void printNetwork() {
         //TODO
+        System.out.println("Print network storage after tests");
+        for (Integer key : nodeMap.keySet()) {
+            nodeMap.get(key).tell(new LogStorage(), null);
+        }
+    }
+
+    private static void updateClients() {
+        for(ActorRef c: clientList) {
+            c.tell(new UpdateNodeListMsg(forClients), null);
+        }
     }
 }
