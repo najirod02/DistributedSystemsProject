@@ -16,9 +16,8 @@ import mars.Client.GetMsg;
 import java.util.Set;
 import java.util.HashSet;
 import java.util.Map;
-import java.util.HashMap;
+import java.util.TreeMap;
 import java.util.LinkedList;
-import java.util.List;
 import java.util.Random;
 import java.util.Scanner;
 
@@ -47,19 +46,29 @@ public class Main {
     private static final Random rand = new Random();
     private static final ActorSystem system = ActorSystem.create("marsakka");
     private static final Logger logger = new Logger(LOGGER_FILE_BASE_PATH + "/test.txt");
-    private static final Map<Integer, ActorRef> nodeMap = new HashMap<>();
-    private static final List<ActorRef> clientList = new LinkedList<>();
+    private static final Map<Integer, ActorRef> nodeMap = new TreeMap<>();
+    private static final LinkedList<ActorRef> clientList = new LinkedList<>();
     private static final Set<ActorRef> forClients = new HashSet<>();    // Nodes list to give to the Clients
     private static ActorRef bootstrap;
+    private static Scanner scanner;
+
+    // Colors
+    public static final String ANSI_RESET = "\u001B[0m";
+    public static final String ANSI_GREEN = "\u001B[32m";
+    public static final String ANSI_RED = "\u001B[31m";
 
     public static void main(String[] args) {
         //FIXME: Close all Akka if assumption is violated
+        //TODO: Add additional random nodes until reach N
+        //TODO: Concurrent GET UPDATE
         //TODO: Other tests
         //at the moment it is hard to understand what is going on
         //maybe leave uncommented the tests you want
         //even better, wait for user input before starting new test
 
         //NOTE: The bootstrap node is always up and running
+
+        scanner = new Scanner(System.in);
 
         System.out.println("Creating 40 - bootstrap");
         bootstrap = system.actorOf(Node.props(40, logger), "40");
@@ -91,7 +100,6 @@ public class Main {
 
         // Interactive choice for tests
         boolean runTests = true;
-        Scanner scanner = new Scanner(System.in);
         while(runTests) {
             System.out.println("Choose a test to run:");
             System.out.println("1. Basic Concurrent Update Test");
@@ -115,25 +123,39 @@ public class Main {
             }
             switch (choice) {
                 case 1:
+                    System.out.println();
                     concurrentUpdateTest();
+                    System.out.println();
                     break;
                 case 2:
+                    System.out.println();
                     sequentialConsistencyTest();
+                    System.out.println();
                     break;
                 case 3:
+                    System.out.println();
                     crashRecoveryTest();
+                    System.out.println();
                     break;
                 case 4:
+                    System.out.println();
                     nodeLeaveTest();
+                    System.out.println();
                     break;
                 case 5:
+                    System.out.println();
                     quorumFailureTest();
+                    System.out.println();
                     break;
                 case 6:
+                    System.out.println();
                     additionalTests();
+                    System.out.println();
                     break;
                 case 7:
+                    System.out.println();
                     interactiveTest();
+                    System.out.println();
                     // Exit after Interactive Test
                 case 8:
                     System.out.println("Exiting...");
@@ -159,7 +181,7 @@ public class Main {
         delay(2000);
         clientList.get(1).tell(new UpdateMsg(42, "SILVER"), null);
         
-        System.out.println("Waiting for operation to complete...");
+        System.out.println("Waiting for the operation to complete...");
         delay(10000);
         System.out.println("== END BASIC CONCURRENT UPDATE TEST ==");
     }
@@ -169,25 +191,29 @@ public class Main {
         logger.log("MAIN", "SEQUENTIAL CONSISTENCY TEST");
         System.out.println("== START SEQUENTIAL CONSISTENCY TEST ==");
 
+        System.out.println("Client 1 and Client 2 concurrent UPDATE on key 42 (one should succeed and one should fail)");
         clientList.get(0).tell(new UpdateMsg(42, "GOLD"), null);
         delay();
         clientList.get(1).tell(new UpdateMsg(42, "SILVER"), null);
         delay(10000);
         
+        System.out.println("Client 1 and Client 2 concurrent READ on key 42 (both should succeed)");
         clientList.get(0).tell(new GetMsg(42), null);
         delay();
         clientList.get(1).tell(new GetMsg(42), null);
         delay(10000);
         
+        System.out.println("Client 1 and Client 2 concurrent UPDATE and GET on key 42 (Update should succeed, Get may succeed or not)");
         clientList.get(0).tell(new UpdateMsg(42, "PLATINUM"), null);
         delay();
         clientList.get(1).tell(new GetMsg(42), null);
         delay(10000);
         
+        System.out.println("Client 1 GET on key 42 (should succeed)");
         clientList.get(0).tell(new GetMsg(42), null);
         delay();
         
-        System.out.println("Waiting for operation to complete...");
+        System.out.println("Waiting for the operation to complete...");
         delay(10000);
         System.out.println("== END SEQUENTIAL CONSISTENCY TEST ==");
     }
@@ -229,7 +255,7 @@ public class Main {
         System.out.println("Client 2 attempts get on key 15 (should succeed)");
         clientList.get(1).tell(new GetMsg(15), null);
         
-        System.out.println("Waiting for operation to complete...");
+        System.out.println("Waiting for the operation to complete...");
         delay(10000);
         
         System.out.println("== END CRASH & RECOVERY TEST ==");
@@ -262,7 +288,7 @@ public class Main {
         System.out.println("Client 1 attempts get on key 9 after node 20 re-joins (should work)");
         clientList.get(0).tell(new GetMsg(9), null);
 
-        System.out.println("Waiting for operation to complete...");
+        System.out.println("Waiting for the operation to complete...");
         delay(10000);
         System.out.println("== END NODE LEAVE TEST ==");
     }
@@ -371,21 +397,23 @@ public class Main {
     private static void interactiveTest() {
         // The user decides the operation
         boolean runTests = true;
-        Scanner scanner = new Scanner(System.in);
 
         System.out.println("== START INTERACTIVE TEST ==");
 
         while(runTests) {
             printNetwork();
             System.out.println("Choose an operation:");
-            System.out.println("1. Update");
-            System.out.println("2. Get");
+            System.out.println("1. Get");
+            System.out.println("2. Update");
             System.out.println("3. Join");
             System.out.println("4. Leave");
             System.out.println("5. Crash");
             System.out.println("6. Recover");
-            System.out.println("7. Exit");
-            System.out.print("Enter your choice (1-7): ");
+            System.out.println("7. Add Client");
+            System.out.println("8. Drop Client");
+            System.out.println("9. Print Network Storage");
+            System.out.println("10. Exit");
+            System.out.print("Enter your choice (1-10): ");
             String choice_s;
             int choice = -1;
             try {
@@ -393,7 +421,7 @@ public class Main {
                 System.out.println("You chose: " + choice_s);
                 choice = Integer.parseInt(choice_s);
             } catch (NumberFormatException e) {
-                System.out.println("Invalid input. Please enter a number between 1 and 7.");
+                System.out.println("Invalid input. Please enter a number between 1 and 10.");
                 continue;
             }
             switch (choice) {
@@ -428,14 +456,28 @@ public class Main {
                     System.out.println();
                     break;
                 case 7:
+                    System.out.println();
+                    addClient();
+                    System.out.println();
+                    break;
+                case 8:
+                    System.out.println();
+                    dropClient();
+                    System.out.println();
+                    break;
+                case 9:
+                    System.out.println();
+                    printStorage();
+                    System.out.println();
+                    break;
+                case 10:
                     System.out.println("Exiting...");
                     runTests = false;
                     break;
                 default:
-                    System.out.println("Invalid choice. Please enter a number between 1 and 8.");
+                    System.out.println("Invalid choice. Please enter a number between 1 and 10.");
             }
         }
-        scanner.close();   
         System.out.println("== END INTERACTIVE TEST ==");
     }
 
@@ -443,17 +485,14 @@ public class Main {
     private static void get() {
         // For simplicity, use only C1
         System.out.print("Choose the key to query: ");
-        Scanner scanner = new Scanner(System.in);
         int choice;
         try {
             choice = Integer.parseInt(scanner.nextLine());
             System.out.println("You chose: " + choice);
         } catch (NumberFormatException e) {
             System.out.println("Invalid input. Please enter a non negative number.");
-            scanner.close();
             return;
         }
-        scanner.close();
 
         // Assume non negative choice
         if(choice < 0) {
@@ -462,7 +501,7 @@ public class Main {
         }
         
         clientList.get(0).tell(new GetMsg(choice), null);
-        System.out.println("Waiting for operation to complete...");
+        System.out.println("Waiting for the operation to complete...");
         delay(10000);
         System.out.println("Get completed. Check the logs.");
     }
@@ -470,7 +509,6 @@ public class Main {
     private static void update() {
         // For simplicity, use only C1
         System.out.print("Choose the key to update: ");
-        Scanner scanner = new Scanner(System.in);
         int key;
         String value;
         try {
@@ -478,46 +516,41 @@ public class Main {
             System.out.println("You chose: " + key);
         } catch (NumberFormatException e) {
             System.out.println("Invalid input. Please enter a non negative number.");
-            scanner.close();
             return;
         }
 
         // Assume non negative choice
         if(key < 0) {
             System.out.println("Invalid input. Please enter a non negative number.");
-            scanner.close();
             return;
         }
 
+        System.out.print("Choose the value: ");
         try {
             value = scanner.nextLine();
             System.out.println("You chose: " + value);
         } catch (NumberFormatException e) {
             System.out.println("Invalid input.");
-            scanner.close();
             return;
         }
-        scanner.close();
         
         clientList.get(0).tell(new UpdateMsg(key, value), null);
-        System.out.println("Waiting for operation to complete...");
+        System.out.println("Waiting for the operation to complete...");
         delay(10000);
         System.out.println("Update completed. Check the logs.");
     }
 
     private static void join() {
+        //FIXME: Fix non unique name bug
         System.out.print("Choose the ID of the node to add to the Network: ");
-        Scanner scanner = new Scanner(System.in);
         int choice;
         try {
             choice = Integer.parseInt(scanner.nextLine());
             System.out.println("You chose: " + choice);
         } catch (NumberFormatException e) {
             System.out.println("Invalid input. Please enter a non negative number.");
-            scanner.close();
             return;
         }
-        scanner.close();
 
         // Assume non negative choice
         if(choice < 0) {
@@ -531,9 +564,9 @@ public class Main {
             return;
         }
 
-        ActorRef newPeer = system.actorOf(Node.props(choice, logger), ""+choice);
+        ActorRef newPeer = system.actorOf(Node.props(choice, logger), Integer.toString(choice));
         newPeer.tell(new JoinMsg(bootstrap), null);
-        System.out.println("Waiting for operation to complete...");
+        System.out.println("Waiting for the operation to complete...");
         delay(5000);
 
         // Check success by seeking file in logs
@@ -546,23 +579,21 @@ public class Main {
         }
         else {
             System.out.println("Join operation failed.");
+            system.stop(newPeer);
         }
     }
 
     private static void leave() {
         //For simplicity, bootstrap (40) cannot leave
         System.out.print("Put the ID of the node that should leave the Network: ");
-        Scanner scanner = new Scanner(System.in);
         int choice;
         try {
             choice = Integer.parseInt(scanner.nextLine());
             System.out.println("You chose: " + choice);
         } catch (NumberFormatException e) {
             System.out.println("Invalid input. Please enter a non negative number.");
-            scanner.close();
             return;
         }
-        scanner.close();
 
         // Assume non negative choice
         if(choice < 0) {
@@ -583,7 +614,7 @@ public class Main {
         }
 
         nodeMap.get(choice).tell(new LeaveMsg(), null);
-        System.out.println("Waiting for operation to complete...");
+        System.out.println("Waiting for the operation to complete...");
         delay(5000);
 
         // Check success by seeking file in logs
@@ -592,27 +623,25 @@ public class Main {
             System.out.println("Leave operation succeded!");
             forClients.remove(nodeMap.get(choice));
             updateClients();
+            system.stop(nodeMap.get(choice));
             nodeMap.remove(choice);
         }
         else {
-            System.out.println("Join operation failed.");
+            System.out.println("Leave operation failed.");
         }
     }
 
     private static void crash() {
         //For simplicity, bootstrap (40) cannot crash
         System.out.print("Put the ID of the node that should crash: ");
-        Scanner scanner = new Scanner(System.in);
         int choice;
         try {
             choice = Integer.parseInt(scanner.nextLine());
             System.out.println("You chose: " + choice);
         } catch (NumberFormatException e) {
             System.out.println("Invalid input. Please enter a non negative number.");
-            scanner.close();
             return;
         }
-        scanner.close();
 
         // Assume non negative choice
         if(choice < 0) {
@@ -635,23 +664,20 @@ public class Main {
         forClients.remove(nodeMap.get(choice));
         updateClients();
         nodeMap.get(choice).tell(new CrashMsg(), null);
-        System.out.println("Waiting for operation to complete...");
+        System.out.println("Waiting for the operation to complete...");
         delay(5000);
     }
 
     private static void recover() {
         System.out.print("Put the ID of the node that should recover: ");
-        Scanner scanner = new Scanner(System.in);
         int choice;
         try {
             choice = Integer.parseInt(scanner.nextLine());
             System.out.println("You chose: " + choice);
         } catch (NumberFormatException e) {
             System.out.println("Invalid input. Please enter a non negative number.");
-            scanner.close();
             return;
         }
-        scanner.close();
 
         // Assume non negative choice
         if(choice < 0) {
@@ -669,26 +695,62 @@ public class Main {
         forClients.add(nodeMap.get(choice));
         updateClients();
 
-        System.out.println("Waiting for operation to complete...");
+        System.out.println("Waiting for the operation to complete...");
         delay(5000);
     }
 
     private static void addClient() {
-        //TODO
+        int nextClientID = clientList.size() + 1;
+        System.out.println("Adding Client C" + nextClientID);
+        clientList.add(system.actorOf(Client.props("C"+nextClientID, logger, forClients), "C"+nextClientID));
     }
 
     private static void dropClient() {
-        //TODO
+        if(clientList.size() > 1) {
+            int lastClientID = clientList.size();
+            System.out.println("Removing Client C" + lastClientID);
+            
+            ActorRef leavingNode = clientList.removeLast();
+            system.stop(leavingNode);
+        }
+        else {
+            System.out.println("At least one client must be up. Operation aborted.");
+        }
     }
 
 
     // UTILS //
     private static void printNetwork() {
-        //TODO
-        System.out.println("Print network storage after tests");
+        System.out.print("Nodes: ");
         for (Integer key : nodeMap.keySet()) {
-            nodeMap.get(key).tell(new LogStorage(), null);
+            // If node is crashed, change print color
+            String color;
+            if(forClients.contains(nodeMap.get(key))) {
+                color = ANSI_GREEN;
+            }
+            else {
+                color = ANSI_RED;
+            }
+            System.out.print(color + key + "  " + ANSI_RESET);
         }
+        System.out.println();
+    }
+
+    private static void printStorage() {
+        System.out.println("Printing network storage");
+        for (Integer key : nodeMap.keySet()) {
+            // If node is crashed, change print color
+            String color;
+            if(forClients.contains(nodeMap.get(key))) {
+                color = ANSI_GREEN;
+            }
+            else {
+                color = ANSI_RED;
+            }
+            System.out.println(color + key + ":" + ANSI_RESET);
+            nodeMap.get(key).tell(new LogStorage(color), null);
+            delay(200);
+        }   
     }
 
     private static void updateClients() {

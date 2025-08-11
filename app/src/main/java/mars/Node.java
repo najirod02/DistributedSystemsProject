@@ -83,6 +83,9 @@ public class Node extends AbstractActor{
     private final boolean[] available_neighbours = new boolean[2*N - 1]; 
     private final boolean[] ignore_nuple = new boolean[N];
 
+    // Color
+    public static final String ANSI_RESET = "\u001B[0m";
+
     // private class to store both value and version inside the storage
     private class VersionedValue{
         public String value;
@@ -218,7 +221,13 @@ public class Node extends AbstractActor{
     }
 
     // --- OTHER MESSAGES -------------------------------
-    public static class LogStorage implements Serializable {}
+    public static class LogStorage implements Serializable {
+        String color;
+
+        public LogStorage(String color) {
+            this.color = color;
+        }
+    }
 
     public static class TimeoutMsg implements Serializable {}
 
@@ -1002,21 +1011,24 @@ public class Node extends AbstractActor{
      * @param msg
      */
     private void onLogStorageMsg(LogStorage msg){
-        StringBuilder sb = new StringBuilder("Current storage:\n");
+        // Print in console, not log
+        StringBuilder sb = new StringBuilder();
     
         storage.entrySet().stream()
             .sorted(Map.Entry.comparingByKey()) // optional, makes output deterministic
             .forEach(entry -> {
                 int key = entry.getKey();
                 VersionedValue v = entry.getValue();
-                sb.append(String.format("  Key: %d -> Value: \"%s\" (v%d)\n", key, v.value, v.version));
+                sb.append(String.format(msg.color + "\t  Key: %d -> Value: \"%s\" (v%d)\n" + ANSI_RESET, 
+                    key, v.value, v.version));
             });
 
         if (storage.isEmpty()) {
-            sb.append("  [empty]");
+            sb.append(msg.color + "\t  [empty]" + ANSI_RESET);
         }
 
-        logger.log(this.name.toString() + " " + this.state, sb.toString());
+        //logger.log(this.name.toString() + " " + this.state, sb.toString());
+        System.out.println(sb.toString());
     }
 
     /**
@@ -1178,6 +1190,7 @@ public class Node extends AbstractActor{
     final AbstractActor.Receive crashed(){
         return receiveBuilder()
             .match(RecoveryMsg.class, this::onRecoverMsg)
+            .match(LogStorage.class, this::onLogStorageMsg)
             .matchAny(msg -> {
                 //any other message is ignored
             })
