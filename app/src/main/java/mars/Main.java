@@ -57,9 +57,62 @@ public class Main {
     public static final String ANSI_GREEN = "\u001B[32m";
     public static final String ANSI_RED = "\u001B[31m";
 
+    // List of random values for tests
+    public static final String[] valueList = {
+    "SILVER",
+    "GOLD",
+    "COPPER",
+    "IRON",
+    "NICKEL",
+    "TIN",
+    "LEAD",
+    "ZINC",
+    "PLATINUM",
+    "TUNGSTEN",
+    "CHROME",
+    "COBALT",
+    "MOLYBDENUM",
+    "MERCURY",
+    "LITHIUM",
+    "URANIUM",
+    "THORIUM",
+    "TITANIUM",
+    "VANADIUM",
+    "BISMUTH",
+    "ARSENIC",
+    "ANTIMONY",
+    "MANGANESE",
+    "SELENIUM",
+    "TELLURIUM",
+    "ALUMINUM",
+    "MAGNESIUM",
+    "CALCIUM",
+    "SODIUM",
+    "POTASSIUM",
+    "BORON",
+    "SULFUR",
+    "PHOSPHORUS",
+    "FLUORITE",
+    "QUARTZ",
+    "CALCITE",
+    "DOLOMITE",
+    "GYPSUM",
+    "HALITE",
+    "PYRITE",
+    "GALENA",
+    "SPHALERITE",
+    "CHALCOPYRITE",
+    "HEMATITE",
+    "MAGNETITE",
+    "ILMENITE",
+    "CASSITERITE",
+    "BAUXITE",
+    "APATITE"
+};
+
+
     public static void main(String[] args) {
         //FIXME: Close all Akka if assumption is violated
-        //TODO: Concurrent GET UPDATE
         //TODO: Other tests
         //at the moment it is hard to understand what is going on
         //maybe leave uncommented the tests you want
@@ -410,15 +463,16 @@ public class Main {
             System.out.println("Choose an operation:");
             System.out.println("1. Get");
             System.out.println("2. Update");
-            System.out.println("3. Join");
-            System.out.println("4. Leave");
-            System.out.println("5. Crash");
-            System.out.println("6. Recover");
-            System.out.println("7. Add Client");
-            System.out.println("8. Drop Client");
-            System.out.println("9. Print Network Storage");
-            System.out.println("10. Exit");
-            System.out.print("Enter your choice (1-10): ");
+            System.out.println("3. Concurrent Gets/Updates");
+            System.out.println("4. Join");
+            System.out.println("5. Leave");
+            System.out.println("6. Crash");
+            System.out.println("7. Recover");
+            System.out.println("8. Add Client");
+            System.out.println("9. Drop Client");
+            System.out.println("10. Print Network Storage");
+            System.out.println("11. Exit");
+            System.out.print("Enter your choice (1-11): ");
             String choice_s;
             int choice = -1;
             try {
@@ -426,7 +480,7 @@ public class Main {
                 System.out.println("You chose: " + choice_s);
                 choice = Integer.parseInt(choice_s);
             } catch (NumberFormatException e) {
-                System.out.println("Invalid input. Please enter a number between 1 and 10.");
+                System.out.println("Invalid input. Please enter a number between 1 and 11.");
                 continue;
             }
             switch (choice) {
@@ -442,40 +496,45 @@ public class Main {
                     break;
                 case 3:
                     System.out.println();
-                    join();
+                    concurrentGetUpdate();
                     System.out.println();
                     break;
                 case 4:
                     System.out.println();
-                    leave();
+                    join();
                     System.out.println();
                     break;
                 case 5:
                     System.out.println();
-                    crash();
+                    leave();
                     System.out.println();
                     break;
                 case 6:
                     System.out.println();
-                    recover();
+                    crash();
                     System.out.println();
                     break;
                 case 7:
                     System.out.println();
-                    addClient();
+                    recover();
                     System.out.println();
                     break;
                 case 8:
                     System.out.println();
-                    dropClient();
+                    addClient();
                     System.out.println();
                     break;
                 case 9:
                     System.out.println();
-                    printStorage();
+                    dropClient();
                     System.out.println();
                     break;
                 case 10:
+                    System.out.println();
+                    printStorage();
+                    System.out.println();
+                    break;
+                case 11:
                     System.out.println("Exiting...");
                     runTests = false;
                     break;
@@ -543,6 +602,84 @@ public class Main {
         System.out.println("Waiting for the operation to complete...");
         delay(10000);
         System.out.println("Update completed. Check the logs.");
+    }
+
+    private static void concurrentGetUpdate() {
+        System.out.println("IMPORTANT!!! The total number of concurrent GET/UPDATE operations \"+\n" + //
+                                "            \"cannot exceed the number of available Clients.");
+        
+        int key, n_gets, n_updates;
+        
+        // Read key
+        System.out.print("Choose the key for the operations: ");
+        try {
+            key = Integer.parseInt(scanner.nextLine());
+            System.out.println("You chose: " + key);
+        } catch (NumberFormatException e) {
+            System.out.println("Invalid input. Please enter a non negative number.");
+            return;
+        }
+
+        if(key < 0) {
+            System.out.println("Invalid input. Please enter a non negative number.");
+            return;
+        }
+        
+        // Read n GET operations
+        System.out.print("Choose the number of GET operations: ");
+        try {
+            n_gets = Integer.parseInt(scanner.nextLine());
+            System.out.println("You chose: " + n_gets);
+        } catch (NumberFormatException e) {
+            System.out.println("Invalid input. Please enter a non negative number.");
+            return;
+        }
+
+        if(n_gets < 0) {
+            System.out.println("Invalid input. Please enter a non negative number.");
+            return;
+        }        
+
+        // Read n UPDATE operations
+        System.out.print("Choose the number of UPDATE operations: ");
+        try {
+            n_updates = Integer.parseInt(scanner.nextLine());
+            System.out.println("You chose: " + n_updates);
+        } catch (NumberFormatException e) {
+            System.out.println("Invalid input. Please enter a non negative number.");
+            return;
+        }     
+        
+        if(n_updates < 0) {
+            System.out.println("Invalid input. Please enter a non negative number.");
+            return;
+        }  
+
+        if(n_gets + n_updates == 0) {
+            System.out.println("Nothing to do.");
+            return;
+        }
+        else if(n_gets + n_updates > clientList.size()) {
+            System.out.println("Invalid request. The total number of concurrent GET/UPDATE operations \"+\n" + //
+                                "            \"cannot exceed the number of available Clients.");
+            return;
+        }
+
+        // UPDATES
+        for(int i=0; i<n_updates; i++) {
+            String value = valueList[i % valueList.length];
+            System.out.println("Client C" + (i+1) + " writing value " + value + ".");
+            clientList.get(i).tell(new UpdateMsg(key, value), null);
+        }
+
+        // GETS
+        for(int i=n_updates; i<n_gets + n_updates; i++) {
+            System.out.println("Client C" + (i+1) + " reading.");
+            clientList.get(i).tell(new GetMsg(key), null);
+        }
+
+        System.out.println("Waiting for the operation to complete...");
+        delay(10000);
     }
 
     private static void join() {
