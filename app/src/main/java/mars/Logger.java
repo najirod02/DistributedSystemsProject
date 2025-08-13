@@ -4,6 +4,12 @@ import java.time.LocalTime;
 import java.time.temporal.ChronoUnit;
 import java.io.File;
 import java.io.FileWriter;
+import java.io.IOException;
+import java.nio.file.Files;
+
+import org.apache.commons.io.FileUtils;
+
+//FileUtils.cleanDirectory(directory); 
 
 /**
  * A simple class that allows any Actor to log the actions taken and the outcomes.
@@ -21,7 +27,7 @@ public class Logger {
 
     public Logger(String filePath){
         startTime = LocalTime.now();
-        this.filePath = filePath;
+        this.filePath = filePath; 
 
         //try to open file stream
         try {
@@ -30,6 +36,9 @@ public class Logger {
             File parentDir = file.getParentFile();
             if (parentDir != null && !parentDir.exists()) {
                 parentDir.mkdirs();
+            }
+            else if(parentDir.exists()) {
+                FileUtils.cleanDirectory(parentDir); 
             }
             
             writer = new FileWriter(filePath);

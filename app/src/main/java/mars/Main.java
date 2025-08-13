@@ -59,7 +59,6 @@ public class Main {
 
     public static void main(String[] args) {
         //FIXME: Close all Akka if assumption is violated
-        //TODO: Add additional random nodes until reach N
         //TODO: Concurrent GET UPDATE
         //TODO: Other tests
         //at the moment it is hard to understand what is going on
@@ -70,6 +69,7 @@ public class Main {
 
         scanner = new Scanner(System.in);
 
+        // Add first 3 nodes
         System.out.println("Creating 40 - bootstrap");
         bootstrap = system.actorOf(Node.props(40, logger), "40");
         bootstrap.tell(new Node.JoinMsg(null), null);
@@ -90,7 +90,17 @@ public class Main {
         nodeMap.get(10).tell(new JoinMsg(bootstrap), null);
         delay(2000);
         
+        // Add remaining nodes depending on N
+        System.out.println("Join the remaining " + (Node.N - 3) + " peers.");
+        for(int i = 5; i <= Node.N + 1; i++) {
+            int idx = i*10;
+            System.out.println("Join " + idx + "...");
+            nodeMap.put(idx, system.actorOf(Node.props(idx, logger), Integer.toString(idx)));
+            nodeMap.get(idx).tell(new JoinMsg(bootstrap), null);
+            delay(2000);
+        }
 
+        // Peers list to send to Clients
         for(Integer key: nodeMap.keySet()) {
             forClients.add(nodeMap.get(key));
         }
@@ -177,8 +187,9 @@ public class Main {
         logger.log("MAIN", "BASIC CONCURRENT UPDATE TEST");
         System.out.println("== START BASIC CONCURRENT UPDATE TEST ==");
         
+        System.out.println("Client 1 and Client 2 concurrent UPDATE on key 42 (one should succeed and one should fail)");
+
         clientList.get(0).tell(new UpdateMsg(42, "GOLD"), null);
-        delay(2000);
         clientList.get(1).tell(new UpdateMsg(42, "SILVER"), null);
         
         System.out.println("Waiting for the operation to complete...");
@@ -193,25 +204,21 @@ public class Main {
 
         System.out.println("Client 1 and Client 2 concurrent UPDATE on key 42 (one should succeed and one should fail)");
         clientList.get(0).tell(new UpdateMsg(42, "GOLD"), null);
-        delay();
         clientList.get(1).tell(new UpdateMsg(42, "SILVER"), null);
         delay(10000);
         
         System.out.println("Client 1 and Client 2 concurrent READ on key 42 (both should succeed)");
         clientList.get(0).tell(new GetMsg(42), null);
-        delay();
         clientList.get(1).tell(new GetMsg(42), null);
         delay(10000);
         
         System.out.println("Client 1 and Client 2 concurrent UPDATE and GET on key 42 (Update should succeed, Get may succeed or not)");
         clientList.get(0).tell(new UpdateMsg(42, "PLATINUM"), null);
-        delay();
         clientList.get(1).tell(new GetMsg(42), null);
         delay(10000);
         
         System.out.println("Client 1 GET on key 42 (should succeed)");
         clientList.get(0).tell(new GetMsg(42), null);
-        delay();
         
         System.out.println("Waiting for the operation to complete...");
         delay(10000);
@@ -329,7 +336,6 @@ public class Main {
         delay(2000);
         System.out.println("Client 2 retries get after recovery (should see URANIUM)");
         clientList.get(1).tell(new GetMsg(88), null);
-        delay();
         System.out.println("=== END QUORUM FAILURE TEST ===");
         delay(10000);
     }

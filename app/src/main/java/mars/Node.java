@@ -34,9 +34,9 @@ import java.nio.file.Files;
  */
 public class Node extends AbstractActor{
     
-    private static final int N = 3,//replication factor
+    public static final int N = 5,//replication factor
                              R = 2,//reading quorum 
-                             W = 2,//writing quorum
+                             W = 4,//writing quorum
                              T = 1000,//in millis
                              MIN_DELAY = 100,//in millis
                              MAX_DELAY = 200;//in millis
@@ -522,16 +522,14 @@ public class Node extends AbstractActor{
         getContext().become(joinRecover());
         this.storage.clear();
 
-        if(msg.bootstrap != null) {
+        if(msg.bootstrap != null) { // Non bootstrap
             ActorRef bootstrap = msg.bootstrap;
             logger.log(this.name.toString() + " " + this.state, "Requesting peers list from " + bootstrap.path().name());
             delay();
             bootstrap.tell(new RequestPeersMsg(), getSelf());
         }
-        else {
-            this.state = State.STABLE;
-            getContext().become(createReceive());
-            logger.log(this.name.toString() + " " + state, "Now STABLE in the network with " + this.peerSet.size() + " nodes");
+        else {  // Bootstrap
+            proceedJoinRecovery();
         }
     }
 
