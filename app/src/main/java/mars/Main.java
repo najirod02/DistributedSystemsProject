@@ -112,7 +112,6 @@ public class Main {
 
 
     public static void main(String[] args) {
-        //FIXME: Close all Akka if assumption is violated
         //TODO: Other tests
         //at the moment it is hard to understand what is going on
         //maybe leave uncommented the tests you want

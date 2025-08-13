@@ -23,20 +23,24 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 
-// FIXME: Find a better way to handle the throws
-
 /**
- * NOTE: a node stores a key only if the key is strictly less than the node itself
- * 
- * e.g.
- * key = 10, node = 10 -> DON'T store
- * key = 9, node = 10 -> store
+ * Represents a node in a distributed key-value store using Akka Actors.
+ * <p>
+ * This class implements quorum-based replication with configurable
+ * replication factor, read quorum, and write quorum. Nodes communicate
+ * asynchronously to achieve eventual consistency, and can enter different
+ * states (join, leave, crash, recovery, stable, out).
+ * </p>
+ * <p>
+ * Note: A node stores a key only if the key is strictly less than the node ID.
+ * Example: key=10, node=10 -> do NOT store; key=9, node=10 -> store.
+ * </p>
  */
 public class Node extends AbstractActor{
     
-    public static final int N = 5,//replication factor
+    public static final int N = 3,//replication factor
                              R = 2,//reading quorum 
-                             W = 4,//writing quorum
+                             W = 2,//writing quorum
                              T = 1000,//in millis
                              MIN_DELAY = 100,//in millis
                              MAX_DELAY = 200;//in millis
@@ -44,6 +48,10 @@ public class Node extends AbstractActor{
 
     private static Random random = new Random();
 
+    /**
+     * This node's state. Used to distinguish behaviours in handlers and to detect
+     * some violations of the assumptions.
+     */
     public enum State {
         JOIN,
         LEAVE,
@@ -53,6 +61,10 @@ public class Node extends AbstractActor{
         RECOVERY,
     }
 
+    /**
+     * Used to distinguish the types of Quorum messages. In order to limit the numberof functions, 
+     * we decided to only use one class of messages for Quorum operations during GET and UPDATES.
+     */
     private enum Quorum {
         GET,
         UPDATE,
@@ -62,31 +74,59 @@ public class Node extends AbstractActor{
         UPDATE_REJECT,//used to reject the update to the replicas
     }
 
+    /** Logs directory path */
     private static final String LOGGER_FILE_BASE_PATH = System.getProperty("user.dir") + "/logs";
 
+    /** Name of this Node. Use it in logs. */
     private Integer name;
+
+    /** Logger. Normally, it's the same for every node. */
     private Logger logger;
+
+    /** Store (key, (value, version)) pairs. Key is unique. */
     private Map<Integer, VersionedValue> storage;
-    public State state;//so that clients/nodes avoid to contact a crashed node and wait indefinetly
+
+    /**  */
+    public State state;
+    
+    /** Keep here GET requests from Clients while serving them */
     private final Map<UUID, PendingRequest> pendingGets = new HashMap<>();
+    /** Keep here UPDATE requests from Clients while serving them */
     private final Map<UUID, PendingRequest> pendingUpdates = new HashMap<>();
-    // used to track the latest proposed non-commited version of each key
-    // key -> version
-    //Note that, because of the assumptions, the replica will always Leave/Crash with porposedVersions empty.
+
+    /** 
+     * Track the latest proposed non-commited version of each key
+     * Because of the assumptions, the replica will always Leave/Crash with porposedVersions empty.
+     */
     private final Map<Integer, ProposedVersion> proposedVersions = new HashMap<>();
-    private final Map<Integer, VersionedValue> proposedValues = new HashMap<>();    // Used during Leave procedure
 
-    private Set<ActorRef> peerSet;//contains also yourself
+    /** Store entries from Leaving nodes before they commit the operation */
+    private final Map<Integer, VersionedValue> proposedValues = new HashMap<>();
 
+    /** Contain every Node in the Network, also this */
+    private Set<ActorRef> peerSet;
+
+    /** Count the number of responses during Item Repartition operations */
     private int item_repartition_responses = 0;
-    // to track which neighbour is available during JOIN
+    
+    /** Track which neighbour is available during JOIN/UPDATE operations */
     private final boolean[] available_neighbours = new boolean[2*N - 1]; 
+
+    /** 
+     * Use during Lave to store which N-uple of near nodes should not be considered
+     * when repartitioning the items. This happens when the leaving node does not
+     * contain any entry for that N-uple.
+     * Use it to ignore the i-th N-uple while checking the received LeaveAck messages
+     * on LeaveTimeout.
+     */
     private final boolean[] ignore_nuple = new boolean[N];
 
-    // Color
+    /** To print in console */
     public static final String ANSI_RESET = "\u001B[0m";
 
-    // private class to store both value and version inside the storage
+    /**
+     * Associates a value and a version. Used into the Node's Storage.
+     */
     private class VersionedValue{
         public String value;
         public Integer version;
@@ -97,17 +137,23 @@ public class Node extends AbstractActor{
         }
     }
 
+    /**
+     * Associated to a request from a Client. It has different constructor for GET
+     * and an UPDATE. 
+     */
     private class PendingRequest {
-        public ActorRef client;
-        public Integer key;
-        public VersionedValue latest;
-        public int responses = 0;
+        public ActorRef client;         // That requested the operation
+        public Integer key;             // 
+        public VersionedValue latest;   // GET --> Stores the most recent read value
+                                        // UPDATE --> Stores the value requested by the Client
+        public int responses = 0;       // Incremented at each replica's answer. 
+                                        // Used to compute qurum. 
 
         // For GET
         public PendingRequest(ActorRef client) {
             this.client = client;
             this.key = null; // no key for GET
-            latest = new VersionedValue(null, 0); // no value for GET
+            latest = new VersionedValue(null, 0);
         }
 
         // For UPDATE
@@ -118,9 +164,16 @@ public class Node extends AbstractActor{
         }
     }
     
+    /**
+     * Used inside proposedVersions, for UPDATE operations.
+     * Attribute requestId is used when receiving a REJECT msg.
+     * In this way, the Node will not remove the proposedValue from
+     * this.poposedValues if it receivesa REJECT for the same key.
+     * NOTE: This holds even for requests served by the same Coordinator.
+     */
     private class ProposedVersion {
         public Integer version;
-        public UUID requestId;
+        public UUID requestId;  // Needed to handle REJECT
 
         public ProposedVersion(Integer version, UUID requestId) {
             this.version = version;
@@ -131,17 +184,30 @@ public class Node extends AbstractActor{
     // MESSAGES --------------------------------------------
 
     // --- STATE MESSAGES -------------------------------
+    /**
+     * Join Message sent by the Main to the Node. The joining node queries the
+     * topology of the network to the Bootstrap.
+     */
     public static class JoinMsg implements Serializable {
-        public final ActorRef bootstrap;
+        public final ActorRef bootstrap;    // Ask for peers to it
         public JoinMsg(ActorRef bootstrap){
             this.bootstrap = bootstrap;
         }
     }
 
+    /**
+     * Leave Message sent by the Main to the Node.
+     */
     public static class LeaveMsg implements Serializable {}
 
+    /**
+     * Crash Message sent by the Main to the Node.
+     */
     public static class CrashMsg implements Serializable {}
 
+    /**
+     * Recovery Message sent by the Main to the Node.
+     */
     public static class RecoveryMsg implements Serializable {
         private final ActorRef recoverNode;//the one to ask for the peer list
         public RecoveryMsg(ActorRef recoverNode){
@@ -150,6 +216,9 @@ public class Node extends AbstractActor{
     }
     
     // --- SERVICE MESSAGES -------------------------------
+    /**
+     * Update Response Message sent by Coordinator to the Client it is serving.
+     */
     public static class UpdateResponse implements Serializable {
             public final boolean isValid;
             public UpdateResponse(boolean isValid){
@@ -157,6 +226,9 @@ public class Node extends AbstractActor{
             }
         }
     
+    /**
+     * Get Response Message sent by the Coordinator to the Client it is serving.
+     */
     public static class GetResponse implements Serializable{
             public final boolean isValid;
             public final String value;
@@ -169,8 +241,18 @@ public class Node extends AbstractActor{
         }
 
     // --- PROCEDURE MESSAGES -------------------------------
+    /**
+     * Sent by the Node who needs the network topology. Sent to another STABLE Node.
+     * Sent by the Joining Node to its bootstrap.
+     * Sent by the Recovering Node to its recoverNode.
+     */
     public static class RequestPeersMsg implements Serializable {}
 
+    /**
+     * Contains the topology that a Node wants to share with another Node.
+     * Sent by the Node that receives the message RequestPeersMsg to the sender.
+     * Sent by the Node who is Joining to announce its presence.
+     */
     public static class PeersMsg implements Serializable {
         public final Set<ActorRef> peerSet;//the set of the nodes in the network
         public final State senderState;//useful to understand if the sender is a joining or a leaving node
@@ -180,8 +262,16 @@ public class Node extends AbstractActor{
         }
     }
 
+    /**
+     * Used by a Node to request the storage of another Node.
+     * Sent by the Joining or Recovering Node to the Neighbours.
+     */
     public static class ItemsRequestMsg implements Serializable {}
 
+    /**
+     * Sent by a Node that wants to share its storage with the receiver.
+     * Sent by the Node who receives an ItemsRequestMsg.
+     */
     public static class ItemRepartitioningMsg implements Serializable {
         public final Map<Integer, VersionedValue> storage;
         public ItemRepartitioningMsg(Map<Integer, VersionedValue> storage){
@@ -189,10 +279,16 @@ public class Node extends AbstractActor{
         }
     }
 
+    /**
+     * This message class is used for:
+     *  - GET/UPDATE msg from Coordinator to Replica
+     *  - GET_ACK/UPDATE_ACK from Replica to Coordinator
+     *  - UPDATE_CONFIRM/UPDATE_REJECT from Coordinator to Replica
+     */
     public static class QuorumRequestMsg implements Serializable {
         public final Integer key;
         public final VersionedValue value;
-        public final Quorum request;//to distinguish between a get, update request and a confirm response
+        public final Quorum request;        // Distinguish the six types of Quorum Message
         public final UUID requestId;
         public QuorumRequestMsg(Integer key, VersionedValue value, Quorum request, UUID requestId){
             this.key = key;
@@ -202,6 +298,12 @@ public class Node extends AbstractActor{
         }
     }
 
+    /**
+     * Sent to the whole network by the Node that initiates a Leave operation.
+     * dataToStore is computed by the sender and contains entries of the storage of the 
+     * sender for which the receiver will be responsible once the Leave operation is 
+     * committed, or for which it is already responsible before the Node leaves.
+     */
     public static class LeaveAnnouncement implements Serializable {
         public final Map<Integer, VersionedValue> dataToStore;//in case of leaving, share the data to store
 
@@ -210,10 +312,17 @@ public class Node extends AbstractActor{
         }
     }
 
+    /**
+     * Sent upon receipt of LeaveAnnouncement by the only Nodes that receive a non-empty
+     * LeaveAnnouncement.dataToStore by the leaving Node.
+     */
     public static class LeaveAck implements Serializable {}
     
+    /**
+     * Contains the outcome of the Leaving Node (COMMIT/REJECT).
+     */
     public static class LeaveOutcomeMsg implements Serializable {
-        boolean commit;
+        boolean commit; // True -> COMMIT; False -> REJECT
 
         public LeaveOutcomeMsg (boolean commit) {
             this.commit = commit;
@@ -221,16 +330,29 @@ public class Node extends AbstractActor{
     }
 
     // --- OTHER MESSAGES -------------------------------
+    /**
+     * Sent by the Main to ask to print the Node's storage.
+     */
     public static class LogStorage implements Serializable {
-        String color;
+        String color;   // Color of the output
+                        // GREEN if the node is stable
+                        // RED if the node is crashed
 
         public LogStorage(String color) {
             this.color = color;
         }
     }
 
+    /**
+     * Timeout set by the Joining or Recovering Node that waits for
+     * the PeersMsg messages.
+     */
     public static class TimeoutMsg implements Serializable {}
 
+    /**
+     * Timeout set by the Coordinator that waits for the GET_ACK or for 
+     * the UPDATE_ACK.
+     */
     public static class QuorumTimeoutMsg implements Serializable {
         public final Integer key;
         public final Quorum request;
@@ -242,6 +364,9 @@ public class Node extends AbstractActor{
         }
     }
 
+    /**
+     * Timeout set by the Leaving Node that waits for the LeaveAck messages.
+     */
     public static class LeaveTimeoutMsg implements Serializable {}
 
     // CONSTRUCTOR -----------------------------------------
@@ -783,7 +908,8 @@ public class Node extends AbstractActor{
         if(this.state == State.JOIN) {
             int idx = getNeighbourIdx(getSender()); 
             if(idx < 0) {
-                throw new IllegalStateException("Node " + this.name + " received ItemRepartitioningMsg from " + getSender().path().name() + " but the index is negative.");
+                throw new IllegalStateException("Node " + this.name + " received ItemRepartitioningMsg from " 
+                + getSender().path().name() + ", that is not a neighbour.");
             }
             // If 2*N - 1 > this.peerSet.size() - 1, then one node 
             // will appear twice in available_neighbours
