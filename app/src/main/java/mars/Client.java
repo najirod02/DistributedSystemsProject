@@ -112,6 +112,10 @@ public class Client extends AbstractActor{
         logger.log(this.name, "Requested GET to " + coordinator.path().name());
     }
 
+    /**
+     * handler for update response given by the coordinator
+     * @param msg contains a boolean to know if the update has been successful
+     */
     private void onUpdateResponse(UpdateResponse msg){
         //check if response is valid and not outside time window
         if(waitingForResponse){
@@ -124,6 +128,10 @@ public class Client extends AbstractActor{
         }
     }
 
+    /**
+     * handler for get response given by the coordinator
+     * @param msg contains a boolean to know if the get has been successful
+     */
     private void onGetResponse(GetResponse msg){
         //check if response is valid and not outside time window
         if(waitingForResponse){
@@ -139,6 +147,11 @@ public class Client extends AbstractActor{
         }
     }
 
+    /**
+     * timeout handler in the case a response from a coordinator is taking too much time
+     * (meaning that the node crashed long before)
+     * @param msg
+     */
     private void onTimeoutMsg(TimeoutMsg msg){
         if(waitingForResponse){ 
             waitingForResponse = false;

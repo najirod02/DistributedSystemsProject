@@ -25,14 +25,22 @@ import java.io.File;
 
 public class Main {
     
+    /**
+     * stop the main thread for a random amount of time
+     * defined by a pre defined interval
+     */
     public static void delay(){
         try{
-            Thread.sleep(rand.nextInt(300) + 200);
+            Thread.sleep(rand.nextInt(MAX_DELAY) + MIN_DELAY);
         }catch(InterruptedException e){
             System.err.println(e);
         }
     }
 
+    /**
+     * stop the main thread for a fixed amount of time
+     * @param millis the amount of time before resuming execution
+     */
     public static void delay(int millis){
         try{
             Thread.sleep(millis);
@@ -52,6 +60,11 @@ public class Main {
     private static ActorRef bootstrap;
     private static Scanner scanner;
 
+    //Delay interval
+    //note that the maximum delay obtainable is MIN + MAX
+    private static final int MIN_DELAY = 200;
+    private static final int MAX_DELAY = 300;
+
     // Colors
     public static final String ANSI_RESET = "\u001B[0m";
     public static final String ANSI_GREEN = "\u001B[32m";
@@ -59,66 +72,58 @@ public class Main {
 
     // List of random values for tests
     public static final String[] valueList = {
-    "SILVER",
-    "GOLD",
-    "COPPER",
-    "IRON",
-    "NICKEL",
-    "TIN",
-    "LEAD",
-    "ZINC",
-    "PLATINUM",
-    "TUNGSTEN",
-    "CHROME",
-    "COBALT",
-    "MOLYBDENUM",
-    "MERCURY",
-    "LITHIUM",
-    "URANIUM",
-    "THORIUM",
-    "TITANIUM",
-    "VANADIUM",
-    "BISMUTH",
-    "ARSENIC",
-    "ANTIMONY",
-    "MANGANESE",
-    "SELENIUM",
-    "TELLURIUM",
-    "ALUMINUM",
-    "MAGNESIUM",
-    "CALCIUM",
-    "SODIUM",
-    "POTASSIUM",
-    "BORON",
-    "SULFUR",
-    "PHOSPHORUS",
-    "FLUORITE",
-    "QUARTZ",
-    "CALCITE",
-    "DOLOMITE",
-    "GYPSUM",
-    "HALITE",
-    "PYRITE",
-    "GALENA",
-    "SPHALERITE",
-    "CHALCOPYRITE",
-    "HEMATITE",
-    "MAGNETITE",
-    "ILMENITE",
-    "CASSITERITE",
-    "BAUXITE",
-    "APATITE"
-};
-
+        "SILVER",
+        "GOLD",
+        "COPPER",
+        "IRON",
+        "NICKEL",
+        "TIN",
+        "LEAD",
+        "ZINC",
+        "PLATINUM",
+        "TUNGSTEN",
+        "CHROME",
+        "COBALT",
+        "MOLYBDENUM",
+        "MERCURY",
+        "LITHIUM",
+        "URANIUM",
+        "THORIUM",
+        "TITANIUM",
+        "VANADIUM",
+        "BISMUTH",
+        "ARSENIC",
+        "ANTIMONY",
+        "MANGANESE",
+        "SELENIUM",
+        "TELLURIUM",
+        "ALUMINUM",
+        "MAGNESIUM",
+        "CALCIUM",
+        "SODIUM",
+        "POTASSIUM",
+        "BORON",
+        "SULFUR",
+        "PHOSPHORUS",
+        "FLUORITE",
+        "QUARTZ",
+        "CALCITE",
+        "DOLOMITE",
+        "GYPSUM",
+        "HALITE",
+        "PYRITE",
+        "GALENA",
+        "SPHALERITE",
+        "CHALCOPYRITE",
+        "HEMATITE",
+        "MAGNETITE",
+        "ILMENITE",
+        "CASSITERITE",
+        "BAUXITE",
+        "APATITE"
+    };
 
     public static void main(String[] args) {
-        //TODO: Other tests
-        //at the moment it is hard to understand what is going on
-        //maybe leave uncommented the tests you want
-        //even better, wait for user input before starting new test
-
-        //NOTE: The bootstrap node is always up and running
-
         scanner = new Scanner(System.in);
 
         // Add first 3 nodes
@@ -132,7 +137,6 @@ public class Main {
         nodeMap.put(20, system.actorOf(Node.props(20, logger), "20"));
         nodeMap.get(20).tell(new JoinMsg(bootstrap), null);
         delay(2000);
-
         
         nodeMap.put(30, system.actorOf(Node.props(30, logger), "30"));
         nodeMap.get(30).tell(new JoinMsg(bootstrap), null);
@@ -169,10 +173,9 @@ public class Main {
             System.out.println("3. Crash & Recovery Test");
             System.out.println("4. Node Leave Test");
             System.out.println("5. Quorum Failure Test");
-            System.out.println("6. Additional Edge Tests");
-            System.out.println("7. Interactive Test");
-            System.out.println("8. Exit");
-            System.out.print("Enter your choice (1-8): ");
+            System.out.println("6. Interactive Test");
+            System.out.println("7. Exit");
+            System.out.print("Enter your choice (1-7): ");
             String choice_s;
             int choice = -1;
             try {
@@ -180,7 +183,7 @@ public class Main {
                 System.out.println("You chose: " + choice_s);
                 choice = Integer.parseInt(choice_s);
             } catch (NumberFormatException e) {
-                System.out.println("Invalid input. Please enter a number between 1 and 8.");
+                System.out.println("Invalid input. Please enter a number between 1 and 7.");
                 continue;
             }
             switch (choice) {
@@ -211,22 +214,18 @@ public class Main {
                     break;
                 case 6:
                     System.out.println();
-                    additionalTests();
-                    System.out.println();
-                    break;
-                case 7:
-                    System.out.println();
                     interactiveTest();
                     System.out.println();
                     // Exit after Interactive Test
-                case 8:
+                case 7:
                     System.out.println("Exiting...");
                     runTests = false;
                     break;
                 default:
-                    System.out.println("Invalid choice. Please enter a number between 1 and 8.");
+                    System.out.println("Invalid choice. Please enter a number between 1 and 7.");
             }
         }
+
         scanner.close();
         logger.log("MAIN", "TERMINATE");
         system.terminate();
@@ -234,6 +233,11 @@ public class Main {
     }
 
     // TESTS //
+
+    /**
+     * testing concurrent update
+     * one operation has to fail to ensure data consistency
+     */
     private static void concurrentUpdateTest() {
         // BASIC CONCURRENT UPDATE TEST
         logger.log("MAIN", "BASIC CONCURRENT UPDATE TEST");
@@ -249,6 +253,12 @@ public class Main {
         System.out.println("== END BASIC CONCURRENT UPDATE TEST ==");
     }
 
+    /**
+     * testing correctness of sequential consistency 
+     * through a sequence of get and update operations.
+     * 
+     * in the case of conflicting operations, one will be aborted
+     */
     private static void sequentialConsistencyTest() {
         // SEQUENTIAL CONSISTENCY TEST
         logger.log("MAIN", "SEQUENTIAL CONSISTENCY TEST");
@@ -265,6 +275,7 @@ public class Main {
         delay(10000);
         
         System.out.println("Client 1 and Client 2 concurrent UPDATE and GET on key 42 (Update should succeed, Get may succeed or not)");
+        //the get can succeed only if the update completes before the get is requested
         clientList.get(0).tell(new UpdateMsg(42, "PLATINUM"), null);
         clientList.get(1).tell(new GetMsg(42), null);
         delay(10000);
@@ -277,6 +288,9 @@ public class Main {
         System.out.println("== END SEQUENTIAL CONSISTENCY TEST ==");
     }
 
+    /**
+     * testing correctness of recovery procedure
+     */
     private static void crashRecoveryTest() {
         // CRASH & RECOVERY
         logger.log("MAIN", "CRASH & RECOVERY");
@@ -286,7 +300,7 @@ public class Main {
 
         forClients.remove(nodeMap.get(20)); // remove the node that is crashing
         forClients.remove(nodeMap.get(30));
-        updateClients();
+        updateClients();//update clients to avoid contacting the crashed node
         
         nodeMap.get(20).tell(new CrashMsg(), null);
         delay(2000);
@@ -319,6 +333,9 @@ public class Main {
         System.out.println("== END CRASH & RECOVERY TEST ==");
     }
 
+    /**
+     * testing of leaving procedure of a node
+     */
     private static void nodeLeaveTest() {
         // NODE LEAVE
         logger.log("MAIN", "NODE LEAVE");
@@ -351,6 +368,10 @@ public class Main {
         System.out.println("== END NODE LEAVE TEST ==");
     }
 
+    /**
+     * test the case a quorum cannot be reached in both update and get
+     * services
+     */
     private static void quorumFailureTest() {
         // QUORUM FAILURE TEST
         logger.log("MAIN", "QUORUM FAILURE TEST");
@@ -392,65 +413,10 @@ public class Main {
         delay(10000);
     }
 
-    private static void additionalTests() {
-        // TODO: Separate and make better
-        // ADDITIONAL EDGE TESTS
-        /*
-        logger.log("MAIN", "ADDITIONAL EDGE TESTS");
-        System.out.println("Concurrent writes to same key");
-        clientList.get(0).tell(new UpdateMsg(55, "ZINC"), null);
-        clientList.get(1).tell(new UpdateMsg(55, "COPPER"), null);
-        delay();
-        System.out.println("Reading value after concurrent writes");
-        clientList.get(0).tell(new GetMsg(55), null);
-        delay();
-
-        System.out.println("Update and multiple gets for stability");
-        clientList.get(0).tell(new UpdateMsg(77, "IRON"), null);
-        delay();
-        clientList.get(1).tell(new GetMsg(77), null);
-        delay();
-        clientList.get(1).tell(new GetMsg(77), null);
-        delay();
-        clientList.get(1).tell(new GetMsg(77), null);
-        delay();
-
-        System.out.println("GET on unknown key (should fail gracefully or return null)");
-        clientList.get(0).tell(new GetMsg(9999), null);
-        delay();
-
-        System.out.println("Crash one node, then update");
-        nodeMap.get(20).tell(new CrashMsg(), null);
-        delay();
-        clientList.get(0).tell(new UpdateMsg(123, "ALUMINUM"), null);
-        delay();
-        System.out.println("Crash another node, now quorum lost");
-        nodeMap.get(30).tell(new CrashMsg(), null);
-        delay();
-        clientList.get(1).tell(new GetMsg(123), null);
-        delay();
-
-        System.out.println("Write, then have a responsible replica leave");
-        clientList.get(0).tell(new UpdateMsg(200, "LEAD"), null);
-        delay();
-        System.out.println("Node 10 leaves");
-        nodeMap.get(10).tell(new LeaveMsg(), null);
-        delay();
-        clientList.get(1).tell(new GetMsg(200), null);
-        delay();
-
-        System.out.println("Simultaneous leave and recovery");
-        nodeMap.get(20).tell(new LeaveMsg(), null);
-        delay();
-        nodeMap.get(30).tell(new RecoveryMsg(bootstrap), null);
-        delay();
-        clientList.get(0).tell(new UpdateMsg(300, "NICKEL"), null);
-        delay();
-        clientList.get(1).tell(new GetMsg(300), null);
-        delay(10000);
-        */
-    }
-
+    /**
+     * allow user to full control the network meaning that he can add new nodes, update values 
+     * and retrieve their values.
+     */
     private static void interactiveTest() {
         // The user decides the operation
         boolean runTests = true;

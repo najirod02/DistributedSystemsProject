@@ -1163,7 +1163,7 @@ public class Node extends AbstractActor{
         else if(msg.request == Quorum.UPDATE_REJECT) {  // Coordinator --> Replica
             // the replica gets a reject from the coordinator
             if(proposedVersions.get(msg.key) != null && proposedVersions.get(msg.key).requestId == msg.requestId) {
-            //if the proposed version is the same as the one stored, remove it
+                //if the proposed version is the same as the one stored, remove it
                 proposedVersions.remove(msg.key);
             }
         }

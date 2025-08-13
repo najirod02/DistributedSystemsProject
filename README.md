@@ -15,6 +15,8 @@ This repository contains the implementation of a distributed storage system deve
 
 - [Log structure](#log-structure)
 
+- [Messages list](#messages-list)
+
 - [Authors](#authors)
 
 ## Installation
@@ -100,6 +102,13 @@ Each log entry follows a structured format:
 - __Actor__, the unique identifier of the actor generating the log entry. This is typically appended with its current state (one of the enums defined in the Node class, like join, leave, etc).
 
 - __Message__, a descriptive string detailing the event or operation. This usually indicates the type of action being executed or that has just completed.
+
+## Messages list
+Given the large number of messages exchanged between Client and Node, a dedicated document listing each message type along with a brief description of its purpose has been written.
+
+The list is organized into categories for the Node and the Client, making it easy to navigate. This reference is especially useful when analyzing logs or extending the system, as it allows quick identification of what each message does and when it is used.
+
+You can find the complete list here: [Messages.md](./app/src/main/java/mars/README.md)
 
 ## Authors
 | **Student**                    |                 **Email**             |
