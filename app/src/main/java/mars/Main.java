@@ -409,8 +409,10 @@ public class Main {
         delay(2000);
         System.out.println("Client 2 retries get after recovery (should see URANIUM)");
         clientList.get(1).tell(new GetMsg(88), null);
-        System.out.println("=== END QUORUM FAILURE TEST ===");
+        
+        System.out.println("Waiting for the operation to complete...");
         delay(10000);
+        System.out.println("=== END QUORUM FAILURE TEST ===");
     }
 
     /**

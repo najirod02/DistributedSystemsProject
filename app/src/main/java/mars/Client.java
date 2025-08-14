@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.Random;
 import java.util.concurrent.TimeUnit;
+import java.util.UUID;
 
 import scala.concurrent.duration.Duration;
 
@@ -24,10 +25,15 @@ public class Client extends AbstractActor{
     private String name;
     private Logger logger;
     private List<ActorRef> nodeList;//so that client can ask randomly any node
-    private boolean waitingForResponse = false;//in case i contact a crashed node
+    private UUID waitingForResponse = null;//in case i contact a crashed node
 
     // MESSAGES --------------------------------------------
-    public static class TimeoutMsg implements Serializable {}
+    public static class TimeoutMsg implements Serializable {
+        private final UUID requestId;
+        public TimeoutMsg(UUID requestId){
+            this.requestId = requestId;
+        }
+    }
 
     public static class UpdateNodeListMsg implements Serializable {
         public final Set<ActorRef> nodeSet;
@@ -39,16 +45,31 @@ public class Client extends AbstractActor{
     public static class UpdateMsg implements Serializable {
         public final Integer key;
         public final String value;
-        public UpdateMsg(Integer key, String value){
+        public final UUID requestId;
+        
+        public UpdateMsg(Integer key, String value){    // Used by Main
             this.key = key;
             this.value = value;
+            this.requestId = null; //generate a new request ID
+        }
+        public UpdateMsg(Integer key, String value, UUID requestId){    // Used by Client
+            this.key = key;
+            this.value = value;
+            this.requestId = requestId;
         }
     }
 
     public static class GetMsg implements Serializable{
         public final Integer key;
-        public GetMsg(Integer key){
+        public final UUID requestId;
+        
+        public GetMsg(Integer key){ // Used by Main
             this.key = key;
+            this.requestId = null; //generate a new request ID
+        }
+        public GetMsg(Integer key, UUID requestId){ // Used by Client
+            this.key = key;
+            this.requestId = requestId;
         }
     }
 
@@ -64,11 +85,11 @@ public class Client extends AbstractActor{
     }
 
     // UTILS -----------------------------------------
-    private void scheduleTimeout() {
+    private void scheduleTimeout(UUID requestId) {
         getContext().getSystem().scheduler().scheduleOnce(
             Duration.create(TIMEOUT, TimeUnit.MILLISECONDS),
             getSelf(),
-            new TimeoutMsg(),
+            new TimeoutMsg(requestId),
             getContext().getSystem().dispatcher(),
             getSelf()
         );
@@ -93,9 +114,10 @@ public class Client extends AbstractActor{
     public void onUpdateMsg(UpdateMsg msg){
         //ask randomly a node (coordinator) to store/update a value in the storage
         ActorRef coordinator = this.nodeList.get(rand.nextInt(this.nodeList.size()));
-        coordinator.tell(new UpdateMsg(msg.key, msg.value), getSelf());
-        waitingForResponse = true;
-        scheduleTimeout();
+        UUID requestId = UUID.randomUUID(); //generate a new request ID
+        coordinator.tell(new UpdateMsg(msg.key, msg.value, requestId), getSelf());
+        waitingForResponse = requestId; //store the request ID to check if response is valid
+        scheduleTimeout(requestId);
         logger.log(this.name, "Requested UPDATE to " + coordinator.path().name());
     }
 
@@ -106,9 +128,10 @@ public class Client extends AbstractActor{
     public void onGetMsg(GetMsg msg){
         //ask randomly a node (coordinator) to retrieve a value in the storage
         ActorRef coordinator = this.nodeList.get(rand.nextInt(this.nodeList.size()));
-        coordinator.tell(new GetMsg(msg.key), getSelf());
-        waitingForResponse = true;
-        scheduleTimeout();
+        UUID requestId = UUID.randomUUID();
+        coordinator.tell(new GetMsg(msg.key, requestId), getSelf());
+        waitingForResponse = requestId; //generate a new request ID
+        scheduleTimeout(requestId);
         logger.log(this.name, "Requested GET to " + coordinator.path().name());
     }
 
@@ -118,8 +141,8 @@ public class Client extends AbstractActor{
      */
     private void onUpdateResponse(UpdateResponse msg){
         //check if response is valid and not outside time window
-        if(waitingForResponse){
-            waitingForResponse = false;
+        if(waitingForResponse == msg.clientRequestId){
+            waitingForResponse = null;
             if(!msg.isValid){
                 logger.log(this.name, "UPDATE request to " + getSender().path().name() + " is NOT valid");
                 return;
@@ -134,8 +157,8 @@ public class Client extends AbstractActor{
      */
     private void onGetResponse(GetResponse msg){
         //check if response is valid and not outside time window
-        if(waitingForResponse){
-            waitingForResponse = false;
+        if(waitingForResponse == msg.clientRequestId){
+            waitingForResponse = null;
             if(!msg.isValid){
                 logger.log(this.name, "GET request to " + getSender().path().name() + " is NOT valid");
                 return;
@@ -153,8 +176,8 @@ public class Client extends AbstractActor{
      * @param msg
      */
     private void onTimeoutMsg(TimeoutMsg msg){
-        if(waitingForResponse){ 
-            waitingForResponse = false;
+        if(waitingForResponse == msg.requestId){ 
+            waitingForResponse = null;
             logger.log(this.name, "Timeout expired waiting for response, giving up...");
         }
     }

@@ -95,10 +95,10 @@ public class Node extends AbstractActor{
     private final Map<UUID, PendingRequest> pendingUpdates = new HashMap<>();
 
     /** 
-     * Track the latest proposed non-commited version of each key
+     * Track the latest proposed non-commited update of each key
      * Because of the assumptions, the replica will always Leave/Crash with porposedVersions empty.
      */
-    private final Map<Integer, ProposedVersion> proposedVersions = new HashMap<>();
+    private final Map<Integer, UUID> proposedUpdates = new HashMap<>();
 
     /** Store entries from Leaving nodes before they commit the operation */
     private final Map<Integer, VersionedValue> proposedValues = new HashMap<>();
@@ -148,36 +148,22 @@ public class Node extends AbstractActor{
                                         // UPDATE --> Stores the value requested by the Client
         public int responses = 0;       // Incremented at each replica's answer. 
                                         // Used to compute qurum. 
+        public UUID clientRequestId;    // The request ID sent by the Client.
 
         // For GET
-        public PendingRequest(ActorRef client) {
+        public PendingRequest(ActorRef client, UUID clientRequestId) {
             this.client = client;
             this.key = null; // no key for GET
             latest = new VersionedValue(null, 0);
+            this.clientRequestId = clientRequestId;
         }
 
         // For UPDATE
-        public PendingRequest(ActorRef client, Integer key, String value) {
+        public PendingRequest(ActorRef client, Integer key, String value, UUID clientRequestId) {
             this.client = client;
             this.key = key;
-            this.latest = new VersionedValue(value, -1);
-        }
-    }
-    
-    /**
-     * Used inside proposedVersions, for UPDATE operations.
-     * Attribute requestId is used when receiving a REJECT msg.
-     * In this way, the Node will not remove the proposedValue from
-     * this.poposedValues if it receivesa REJECT for the same key.
-     * NOTE: This holds even for requests served by the same Coordinator.
-     */
-    private class ProposedVersion {
-        public Integer version;
-        public UUID requestId;  // Needed to handle REJECT
-
-        public ProposedVersion(Integer version, UUID requestId) {
-            this.version = version;
-            this.requestId = requestId;
+            this.latest = new VersionedValue(value, 0);
+            this.clientRequestId = clientRequestId;
         }
     }
 
@@ -221,8 +207,10 @@ public class Node extends AbstractActor{
      */
     public static class UpdateResponse implements Serializable {
             public final boolean isValid;
-            public UpdateResponse(boolean isValid){
+            public final UUID clientRequestId;
+            public UpdateResponse(boolean isValid, UUID clientRequestId) {
                 this.isValid = isValid;
+                this.clientRequestId = clientRequestId;
             }
         }
     
@@ -233,10 +221,12 @@ public class Node extends AbstractActor{
             public final boolean isValid;
             public final String value;
             public final Integer version;
-            public GetResponse(boolean isValid, String value, Integer version){
+            public final UUID clientRequestId;
+            public GetResponse(boolean isValid, String value, Integer version, UUID clientRequestId) {
                 this.isValid = isValid;
                 this.value = value;
                 this.version = version;
+                this.clientRequestId = clientRequestId;
             }
         }
 
@@ -627,15 +617,14 @@ public class Node extends AbstractActor{
      * @param version: New version (computed by the Coordinator after doing a GET)
      * @param replicas: Responsible replicas for the key
      */
-    private void sendUpdateToReplicas(UUID requestId, Integer key, String value, Integer version, 
-                                    List<ActorRef> replicas) {
+    private void sendUpdateToReplicas(UUID requestId, Integer key, String value, List<ActorRef> replicas) {
         // Send UPDATE requests to replicas
         for(ActorRef node : replicas){
             logger.log(this.name.toString() + " " + this.state, "Sending UPDATE request to node " + 
                 node.path().name());
             delay();
             node.tell(
-                new QuorumRequestMsg(key, new VersionedValue(value, version), Quorum.UPDATE, requestId), 
+                new QuorumRequestMsg(key, null, Quorum.UPDATE, requestId), 
                 getSelf()
             );
         }
@@ -803,7 +792,7 @@ public class Node extends AbstractActor{
         this.state = State.CRASH;
         getContext().become(crashed());
 
-        if(!proposedVersions.isEmpty()){
+        if(!proposedUpdates.isEmpty()){
             throw new IllegalStateException("Node " + this.name + 
                 " is CRASHING but has pending proposed versions. Assumptions violated.");
         }
@@ -830,8 +819,7 @@ public class Node extends AbstractActor{
     /**
      * Serve the Client requesting for an UPDATE operation.
      * The operation succeeds if and only if W votes from replicas are collected.
-     * Before proceeding, the Coordinator has to perform a GET operation to 
-     * obtain the lates version of the key.
+     * The Coordinator obtains the latest version with the UPDATE_ACKs 
      * @param msg
      */
     private void onUpdateMsg(UpdateMsg msg){
@@ -841,10 +829,8 @@ public class Node extends AbstractActor{
         }
         
         //store the pending get request of the client
-        PendingRequest pendingGet = new PendingRequest(getSender());
-        PendingRequest pendingUpdate = new PendingRequest(getSender(), msg.key, msg.value);
+        PendingRequest pendingUpdate = new PendingRequest(getSender(), msg.key, msg.value, msg.requestId);
         UUID requestId = UUID.randomUUID();
-        pendingGets.put(requestId, pendingGet);
         pendingUpdates.put(requestId, pendingUpdate);
 
         logger.log(this.name.toString() + " " + this.state, "Received UPDATE request from " + 
@@ -855,8 +841,8 @@ public class Node extends AbstractActor{
         int firstReplicaIndex = findResponsibleReplicaIndex(msg.key, peers);
         List<ActorRef> replicas = getNextN(peers, firstReplicaIndex);
         
-        //GET before UPDATE
-        sendGetToReplicas(requestId, msg.key, replicas);
+        //UPDATE
+        sendUpdateToReplicas(requestId, msg.key, msg.value, replicas);
     }
 
     /**
@@ -871,7 +857,7 @@ public class Node extends AbstractActor{
         }
 
         //store the pending get request of the client
-        PendingRequest pending = new PendingRequest(getSender());
+        PendingRequest pending = new PendingRequest(getSender(), msg.requestId);
         UUID requestId = UUID.randomUUID();
         pendingGets.put(requestId, pending);
 
@@ -1019,7 +1005,7 @@ public class Node extends AbstractActor{
         if(msg.request == Quorum.GET){  // Coordinator --> Replica
             //get request
             //the node responds to the coordinator with the stored value
-            if(!proposedVersions.containsKey(msg.key)) {
+            if(!proposedUpdates.containsKey(msg.key)) {
                 logger.log(this.name.toString() + " " + this.state, "Responding to GET request from " + 
                     getSender().path().name() + " for request ID " + msg.requestId);
                 delay();
@@ -1037,30 +1023,22 @@ public class Node extends AbstractActor{
             }
         } else if(msg.request == Quorum.UPDATE){ // Coordinator --> Replica
             //update request
-            Integer stored_version = 0;
-            //check if the item is already stored
-            VersionedValue item = storage.get(msg.key);
-            if(item != null){
-                stored_version = item.version;
-            }
-
-            // Reply with success only if the proposed version is greater than the current stored version
-            // and of the version of the last UPDATE request.  
-            if(stored_version < msg.value.version && (!proposedVersions.containsKey(msg.key) || 
-            proposedVersions.get(msg.key).version < msg.value.version)) {
+            // Reply with success only if replica not already got a propose for this key
+            if(!proposedUpdates.containsKey(msg.key)) {
                 //Note that if you skip a version when committing, sequential consistency is not violated.
-                ProposedVersion proposedVersion = new ProposedVersion(msg.value.version, msg.requestId);
-                proposedVersions.put(msg.key, proposedVersion);
+                proposedUpdates.put(msg.key, msg.requestId);
                 logger.log(this.name.toString() + " " + this.state, "Responding to UPDATE request from " + 
-                    getSender().path().name() + " for request ID " + msg.requestId + " with version " + msg.value.version);
+                    getSender().path().name() + " for request ID " + msg.requestId);
                 delay();
                 // UPDATE_ACK
-                getSender().tell(new QuorumRequestMsg(msg.key, msg.value, Quorum.UPDATE_ACK, msg.requestId), getSelf());
+                VersionedValue currentValue = this.storage.get(msg.key);
+                getSender().tell(new QuorumRequestMsg(msg.key, currentValue, 
+                    Quorum.UPDATE_ACK, msg.requestId), getSelf());
             }
             else {
                 //if the version is not greater, just ignore the request
                 logger.log(this.name.toString() + " " + this.state, "Ignoring UPDATE request from " + 
-                    getSender().path().name() + " for request ID " + msg.requestId + " (version not greater)");
+                    getSender().path().name() + " for request ID " + msg.requestId + " (blocked for key " + msg.key + ")");
             }
             
         } else if(msg.request == Quorum.GET_ACK){   // Replica --> Coordinator
@@ -1081,27 +1059,16 @@ public class Node extends AbstractActor{
 
             // If R votes, proceed
             if(++pending.responses == R){
-                if(!pendingUpdates.containsKey(msg.requestId)) {    // Only GET
-                    //quorum reached, respond to client
-                    logger.log(this.name.toString() + " " + this.state, "Value " + pending.latest.value + " with version " + 
-                        pending.latest.version + " is the latest for key " + msg.key);
-                    logger.log(this.name.toString() + " " + this.state, "GET request " + msg.requestId + " finalized");
-                    pendingGets.remove(msg.requestId);
-                    delay();
-                    pending.client.tell(new GetResponse(true, pending.latest.value, pending.latest.version), getSelf());
-                } else {    // GET before UPDATE
-                    // Send UPDATE to replicas
-                    // Note that, by assumption, peers will not crash between GET and following UPDATE
-                    List<ActorRef> peers = setToList(this.peerSet);
-                    int firstReplicaIndex = findResponsibleReplicaIndex(msg.key, peers);
-                    List<ActorRef> replicas = getNextN(peers, firstReplicaIndex);
-                    pendingGets.remove(msg.requestId);
-                    
-                    // Send Update
-                    PendingRequest pendingUpdate = pendingUpdates.get(msg.requestId);
-                    sendUpdateToReplicas(msg.requestId, pendingUpdate.key, pendingUpdate.latest.value, 
-                        pending.latest.version + 1, replicas);
-                }
+                //quorum reached, respond to client
+                logger.log(this.name.toString() + " " + this.state, "Value " + pending.latest.value + " with version " + 
+                    pending.latest.version + " is the latest for key " + msg.key);
+                logger.log(this.name.toString() + " " + this.state, "GET request " + msg.requestId + " finalized");
+                pendingGets.remove(msg.requestId);
+                delay();
+                pending.client.tell(
+                    new GetResponse(true, pending.latest.value, pending.latest.version, pending.clientRequestId), 
+                    getSelf()
+                );
             }
             
         } else if(msg.request == Quorum.UPDATE_ACK){    // Replica --> Coordinator
@@ -1109,6 +1076,11 @@ public class Node extends AbstractActor{
             PendingRequest pending = pendingUpdates.get(msg.requestId);
 
             if(pending == null) return;//in case of errors
+
+            // Overwrite with latest version
+            if(msg.value != null && msg.value.version > pending.latest.version){
+                pending.latest.version = msg.value.version;
+            }
             
             logger.log(this.name.toString() + " " + this.state, "Received UPDATE_ACK from " + getSender().path().name() + 
                 " for request ID " + msg.requestId);
@@ -1120,13 +1092,17 @@ public class Node extends AbstractActor{
                 List<ActorRef> peers = setToList(this.peerSet);
                 int firstReplicaIndex = findResponsibleReplicaIndex(msg.key, peers);
                 List<ActorRef> replicas = getNextN(peers, firstReplicaIndex);
+                
+                int key = pending.key;
+                String value = pending.latest.value;
+                int version = pending.latest.version + 1;
 
                 // UPDATE_CONFIRM
                 for(ActorRef replica : replicas){
                     logger.log(this.name.toString() + " " + this.state, "Sending UPDATE ACK to node " + 
                         replica.path().name() + " for request ID " + msg.requestId);
                     delay();
-                    replica.tell(new QuorumRequestMsg(msg.key, new VersionedValue(msg.value.value, msg.value.version), 
+                    replica.tell(new QuorumRequestMsg(key, new VersionedValue(value, version), 
                         Quorum.UPDATE_CONFIRM, msg.requestId), getSelf());
                 }
 
@@ -1134,11 +1110,11 @@ public class Node extends AbstractActor{
                 logger.log(this.name.toString() + " " + this.state, "UPDATE request " + msg.requestId + " finalized");
                 pendingUpdates.remove(msg.requestId);
                 delay();
-                pending.client.tell(new UpdateResponse(true), getSelf());
+                pending.client.tell(new UpdateResponse(true, pending.clientRequestId), getSelf());
             }
         }
         // Note that, assuming that no node can crash during the UPDATE process, each node will eventually
-        // receive an UPDATE_CONFIRM or UPDATE_REJECT for each value stored in proposedVersions.
+        // receive an UPDATE_CONFIRM or UPDATE_REJECT for each value stored in proposedUpdates.
         else if(msg.request == Quorum.UPDATE_CONFIRM) { // Coordinator --> Replica
             //the replica gets a confirmation or reject from the coordinator
             // Write only if the version is greater than the one stored
@@ -1150,21 +1126,20 @@ public class Node extends AbstractActor{
             if(item != null){
                 stored_version = item.version;
             }
-            //We need this check in the case the COMMIT of the coordinator who proposed the version propagates
-            //faster than the COMMIT of the coordinator who proposed the previous version.
+            //A COMMIT is always valid as it obtained W votes
             if(stored_version < msg.value.version) {
                 this.storage.put(msg.key, new VersionedValue(msg.value.value, msg.value.version)); 
             }
 
-            if(proposedVersions.get(msg.key) != null && proposedVersions.get(msg.key).version == msg.value.version) {
-                proposedVersions.remove(msg.key);
+            if(proposedUpdates.get(msg.key) != null && proposedUpdates.get(msg.key) == msg.requestId) {
+                proposedUpdates.remove(msg.key);
             }
         }
         else if(msg.request == Quorum.UPDATE_REJECT) {  // Coordinator --> Replica
             // the replica gets a reject from the coordinator
-            if(proposedVersions.get(msg.key) != null && proposedVersions.get(msg.key).requestId == msg.requestId) {
+            if(proposedUpdates.get(msg.key) != null && proposedUpdates.get(msg.key) == msg.requestId) {
                 //if the proposed version is the same as the one stored, remove it
-                proposedVersions.remove(msg.key);
+                proposedUpdates.remove(msg.key);
             }
         }
     }
@@ -1278,12 +1253,12 @@ public class Node extends AbstractActor{
             .forEach(entry -> {
                 int key = entry.getKey();
                 VersionedValue v = entry.getValue();
-                sb.append(String.format(msg.color + "\t  Key: %d -> Value: \"%s\" (v%d)\n" + ANSI_RESET, 
+                sb.append(String.format(msg.color + "  Key: %d -> Value: \"%s\" (v%d)\n" + ANSI_RESET, 
                     key, v.value, v.version));
             });
 
         if (storage.isEmpty()) {
-            sb.append(msg.color + "\t  [empty]" + ANSI_RESET);
+            sb.append(msg.color + "  [empty]" + ANSI_RESET);
         }
 
         //logger.log(this.name.toString() + " " + this.state, sb.toString());
@@ -1341,23 +1316,10 @@ public class Node extends AbstractActor{
         if (msg.request == Quorum.GET) {    // GET
             PendingRequest pending = pendingGets.get(msg.requestId);
             if (pending != null && pending.responses < R) {
-                if(!pendingUpdates.containsKey(msg.requestId)) {    // Case of GET with no UPDATE
-                    logger.log(this.name.toString() + " " + this.state, "GET request " + msg.requestId + " TIMEOUT, no quorum");
-                    pendingGets.remove(msg.requestId);//clean up
-                    delay();
-                    pending.client.tell(new GetResponse(false, null, -1), getSelf());
-                }
-                else {  // Case of GET for UPDATE
-                    logger.log(this.name.toString() + " " + this.state, "GET request before UPDATE " + 
-                        msg.requestId + " TIMEOUT, no quorum");
-                    
-                    pendingGets.remove(msg.requestId);//clean up
-                    pendingUpdates.remove(msg.requestId);//clean up
-                    
-                    // Directly respond to Client's Update request
-                    delay();
-                    pending.client.tell(new UpdateResponse(false), getSelf());
-                }
+                logger.log(this.name.toString() + " " + this.state, "GET request " + msg.requestId + " TIMEOUT, no quorum");
+                pendingGets.remove(msg.requestId);//clean up
+                delay();
+                pending.client.tell(new GetResponse(false, null, -1, pending.clientRequestId), getSelf());
             }   // Otherwise do nothing. The Request already reached R votes.
         } else if (msg.request == Quorum.UPDATE) {  // UPDATE
             PendingRequest pending = pendingUpdates.get(msg.requestId);
@@ -1382,7 +1344,7 @@ public class Node extends AbstractActor{
                     " TIMEOUT, no quorum");
                 pendingUpdates.remove(msg.requestId);//clean up
                 delay();
-                pending.client.tell(new UpdateResponse(false), getSelf());
+                pending.client.tell(new UpdateResponse(false, pending.clientRequestId), getSelf());
             }   // Otherwise do nothing. The Request already reached W votes.
         }
     }
